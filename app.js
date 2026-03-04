@@ -10,7 +10,16 @@
 //  6. 6-button memory row: APP / TWR / GND / DEL / CTR / ATIS
 // ═══════════════════════════════════════════════════════════════════════
 
-const BACKEND_WS_URL = 'wss://CHANGE-ME-BACKEND-URL/ws';
+// ── Dynamic endpoints — resolves to whichever host served the page.
+// Works transparently on localhost, LAN (Pi IP), and production domain.
+const _HOST     = window.location.hostname;
+const _PORT     = 8080;
+const _WS_PROTO = window.location.protocol === 'https:' ? 'wss' : 'ws';
+
+const WS_URL   = `${_WS_PROTO}://${_HOST}:${_PORT}/ws/traffic`;
+const API_BASE = `${window.location.protocol}//${_HOST}:${_PORT}`;
+const HEALTH   = `${API_BASE}/health`;
+const STATUS   = `${API_BASE}/status`;
 
 // ── Reference: EDDN Nuremberg ─────────────────────────────────────────
 const REF_LAT = 49.49;
@@ -632,9 +641,9 @@ wfBody.addEventListener('mouseleave', () => {
 
 function connectWebSocket() {
   setConnStatus('connecting');
-  log('Connecting to ' + BACKEND_WS_URL + '…', 'info');
+  log('Connecting to ' + WS_URL + '…', 'info');
   let ws;
-  try { ws = new WebSocket(BACKEND_WS_URL); }
+  try { ws = new WebSocket(WS_URL); }
   catch(e) { log('WebSocket unavailable — mock mode', 'warn'); startMock(); return; }
 
   const timeout = setTimeout(() => {
@@ -644,18 +653,35 @@ function connectWebSocket() {
     }
   }, 5000);
 
-  ws.onopen    = () => { clearTimeout(timeout); setConnStatus('live'); log('LIVE data connected', 'ok'); };
+  ws.onopen = () => {
+    clearTimeout(timeout);
+    setConnStatus('live');
+    log('LIVE data connected ← ' + WS_URL, 'ok');
+    pollHealth();
+  };
   ws.onmessage = e => {
     try { const m = JSON.parse(e.data); if (m.type === 'tracks') handleTracksMsg(m.tracks); }
     catch(err) { log('Parse error: ' + err.message, 'error'); }
   };
-  ws.onerror   = () => { clearTimeout(timeout); log('WS error — mock mode', 'warn'); startMock(); };
-  ws.onclose   = () => {
+  ws.onerror = () => { clearTimeout(timeout); log('WS error — mock mode', 'warn'); startMock(); };
+  ws.onclose = () => {
     if (document.getElementById('conn-badge').classList.contains('badge-live')) {
       log('WS closed — reconnect in 5s', 'warn'); setConnStatus('connecting');
       setTimeout(connectWebSocket, 5000);
     }
   };
+}
+
+/** Poll /health once on connect and log backend status */
+async function pollHealth() {
+  try {
+    const r = await fetch(HEALTH, { signal: AbortSignal.timeout(3000) });
+    const j = await r.json();
+    log('Backend health: ' + JSON.stringify(j), 'ok');
+  } catch(e) {
+    // Health endpoint optional — don't surface as error
+    log('Health endpoint not available (' + HEALTH + ')', 'info');
+  }
 }
 
 function handleTracksMsg(arr) {
@@ -981,6 +1007,7 @@ function log(msg, type='info') {
 // ═══════════════════════════════════════════════════════════════════════
 
 log('PIRX v0.6.0 — EDDN Nuremberg mode', 'ok');
+log('WS → ' + WS_URL, 'info');
 log('WF: 118–128 MHz · click to tune · hover for freq', 'info');
 log('Tags: GREEN=VFR · BLUE=IFR · RED=EMRG', 'info');
 
