@@ -9,10 +9,10 @@ Current version: **0.6.0** · Reference station: **EDDN Nuremberg** · See [CHAN
 ## Layout Overview
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ⬡ PIRX  Radar / SDR Console            ● MOCK   11 TRACKS   40NM   │
-├─────────────────────────────────────┬────────────────────────────────┤
-│                                     │  ⊕ Selected Track             │
+┌────────────────────────────────────────────────────────────────────┐
+│ ⬡ PIRX  Radar / SDR Console            ● MOCK   11 TRACKS  40NM    │
+├─────────────────────────────────────┬──────────────────────────────┤
+│                                     │  ⊕ Selected Track           │
 │                                     │  ICAO   3C1A3F               │
 │   Canvas radar                      │  CALL   DLH123               │
 │   equirectangular projection        │  AFL    FL340                │
@@ -25,7 +25,7 @@ Current version: **0.6.0** · Reference station: **EDDN Nuremberg** · See [CHAN
 │   GS452                             │                              │
 │                                     │                              │
 ├───────────┬─────────────────────────┴──────────┬───────────────────┤
-│ ATC       │  118 ─── 120 ─── 122 ─── 124 ─ 128│  System Log       │
+│ ATC       │  118 ─── 120 ─── 122 ─── 124 ─ 128 │  System Log       │
 │ Scanner   │  [FFT spectrum line]               │  12:34:01Z …      │
 │           │  [waterfall scrolling down]        │  12:34:00Z Tuned… │
 └───────────┴────────────────────────────────────┴───────────────────┘
