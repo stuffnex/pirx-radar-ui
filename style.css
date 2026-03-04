@@ -37,11 +37,11 @@
   /* ── Radar ── */
   --radar-bg:   #0a0a0a;
 
-  /* ── iCAS2 label state backgrounds ── */
-  --icas2-normal-bg:      rgba(60,60,60,0.93);
-  --icas2-assumed-bg:     rgba(255,130,0,0.93);
-  --icas2-coordinated-bg: rgba(0,195,135,0.93);
-  --icas2-urgency-bg:     rgba(255,60,60,0.97);
+  /* ── iCAS2 tag colours (reference — applied via canvas JS) ──
+     Emergency  7500/7600/7700 → #ff4444
+     OAT/mil    0xxx           → #ffaa00
+     VFR        7000           → #00ff88
+     IFR other               → #66ccff   */
 
   /* ── Typography ── */
   --font-mono:  'Share Tech Mono','Courier New',monospace;
@@ -412,12 +412,15 @@ body { display:flex; flex-direction:column; }
 .log-ts { color:var(--txt-dim); margin-right:5px; font-size:8.5px; }
 
 /* ════════════════════════════════════════
-   iCAS2 LABEL STATE CLASSES
+   iCAS2 LABEL STATE — text-colour only
+   All canvas labels are TRANSPARENT bg.
+   Colors applied via getTagColor() in JS.
    ════════════════════════════════════════ */
-.icas2-normal      { background:var(--icas2-normal-bg);      color:#ffffff; font-weight:700; }
-.icas2-assumed     { background:var(--icas2-assumed-bg);     color:#ffffff; font-weight:700; }
-.icas2-coordinated { background:var(--icas2-coordinated-bg); color:#ffffff; font-weight:700; }
-.icas2-urgency     { background:var(--icas2-urgency-bg);     color:#ffffff; font-weight:700; }
+/* Tag colour reference (mirrors getTagColor in app.js):
+   Emergency  7500/7600/7700 → #ff4444  red
+   OAT/mil    0xxx           → #ffaa00  amber
+   VFR        7000           → #00ff88  green
+   IFR other               → #66ccff  light blue  */
 
 /* ════════════════════════
    SCROLLBAR

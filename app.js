@@ -1,7 +1,7 @@
 'use strict';
 // ═══════════════════════════════════════════════════════════════════════
 // PIRX Radar / SDR Console — app.js
-// iCAS2 labels · ATC frequency scanner · WebSocket/mock · waterfall
+// Transparent iCAS2 tags · ATC scanner · WebSocket/mock · waterfall
 // ═══════════════════════════════════════════════════════════════════════
 
 // ── Backend endpoint ─────────────────────────────────────────────────
@@ -13,13 +13,13 @@ const REF_LON =  8.53;
 const NM_TO_M = 1852;
 
 // ═══════════════════════════════════════════════════════════════════════
-// iCAS2 DATA LOOKUP TABLES
+// iCAS2 LOOKUP TABLES
 // ═══════════════════════════════════════════════════════════════════════
 
 const SQI_MAP = {
   '7000': 'V',  // VFR
   '2000': 'I',  // IFR entering
-  '1200': 'L',  // VFR (US standard)
+  '1200': 'L',  // VFR US
   '7500': 'S',  // Hijack
   '7600': 'R',  // Radio failure
   '7700': 'E',  // Emergency
@@ -33,48 +33,376 @@ const WTC_MAP = {
   'DLT':'M','CFG':'M','TUI':'M','EWG':'M','GEC':'H',
 };
 
-const STATE_COLORS = {
-  normal:       'rgba(60,60,60,0.93)',
-  assumed:      'rgba(255,130,0,0.93)',
-  coordinated:  'rgba(0,195,135,0.93)',
-  urgency:      'rgba(255,60,60,0.97)',
+// ATYP (aircraft type) — derived from callsign prefix for mock
+const ATYP_MAP = {
+  'DLH':'A320','BAW':'B744','UAE':'A388','EZY':'A319',
+  'RYR':'B738','SAS':'A320','KLM':'B738','AFR':'A320',
+  'THY':'A320','SWR':'A220','AUA':'A320','TUI':'B738',
 };
 
 const MOCK_SI  = ['LGW','HAM','AMS','FRA','MUC','ZRH','CDG','BRU','CPH','DUS'];
 const MOCK_COP = ['TOP','BOT','LFT','RGT','NTH','STH','EST','WST'];
 
 // ═══════════════════════════════════════════════════════════════════════
+// TAG COLOUR — squawk-based, applied to ENTIRE label (no backgrounds)
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * Returns the colour for the entire track label based on squawk code.
+ *
+ * RED       #ff4444  — emergency squawks 7500 / 7600 / 7700
+ * AMBER     #ffaa00  — OAT / military codes 0000–0777
+ * GREEN     #00ff88  — VFR standard 7000
+ * LIGHT BLUE #66ccff — all other IFR / general codes
+ */
+function getTagColor(squawk) {
+  if (!squawk) return '#66ccff';
+  if (/^(7500|7600|7700)$/.test(squawk)) return '#ff4444';   // emergency
+  if (/^0[0-7]{3}$/.test(squawk))        return '#ffaa00';   // OAT / mil
+  if (squawk === '7000')                  return '#00ff88';   // VFR
+  return '#66ccff';                                           // IFR default
+}
+
+// Dim colour for secondary/grey fields (dimmer version of the tag colour)
+function getDimColor(squawk) {
+  const c = getTagColor(squawk);
+  // Map full-brightness accent → 40% opacity equivalent as hex
+  const dimMap = {
+    '#ff4444': 'rgba(255,68,68,0.38)',
+    '#ffaa00': 'rgba(255,170,0,0.38)',
+    '#00ff88': 'rgba(0,255,136,0.38)',
+    '#66ccff': 'rgba(102,204,255,0.38)',
+  };
+  return dimMap[c] || 'rgba(180,220,255,0.35)';
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// FIELD DERIVATION HELPERS
+// ═══════════════════════════════════════════════════════════════════════
+
+function getSQI(squawk)  { return SQI_MAP[squawk] || ''; }
+
+function getWTC(callsign) {
+  if (!callsign) return '';
+  return WTC_MAP[callsign.substring(0,3).toUpperCase()] || 'M';
+}
+
+function getATYP(callsign) {
+  if (!callsign) return '';
+  return ATYP_MAP[callsign.substring(0,3).toUpperCase()] || '';
+}
+
+/** Format altitude: 34000 → FL340, 800 → 800ft */
+function formatFL(alt) {
+  if (alt == null) return '';
+  if (alt >= 1000) return 'FL' + Math.round(alt/100).toString().padStart(3,'0');
+  return Math.round(alt) + 'ft';
+}
+
+/**
+ * Format CRC (climb-rate code): 1500fpm → +15, -800fpm → -08
+ * Returns '' if rate < 50fpm (level — no display needed)
+ */
+function formatCRC(vr) {
+  if (vr == null || Math.abs(vr) < 50) return '';
+  const h = Math.round(vr / 100);
+  return (h >= 0 ? '+' : '') + Math.abs(h).toString().padStart(2, '0');
+}
+
+/**
+ * Trend arrow: ↓ for descent >500fpm, nothing for climb/level.
+ * In the images the arrow is ↓ inline with AFL for descent only.
+ */
+function trendChar(vr) {
+  if (vr != null && vr < -500) return '↓';
+  return '';
+}
+
+/** Format ARC (assigned rate of climb): +800 or -500 */
+function formatARC(vr) {
+  if (vr == null || Math.abs(vr) < 50) return '';
+  const h = Math.round(vr / 100) * 100;
+  return (h >= 0 ? '+' : '') + h;
+}
+
+function getMockExtras(t) {
+  const h = parseInt(t.icao.slice(-3), 16);
+  const altDelta = (h % 2 === 0 ? 1 : -1) * 1000;
+  const cfl = formatFL(t.altitude + altDelta);
+  const afl = formatFL(t.altitude);
+  return {
+    si:   MOCK_SI[h % MOCK_SI.length],
+    // CFL: hide if equals AFL (same altitude assigned)
+    cfl:  cfl === afl ? '' : cfl,
+    cop:  MOCK_COP[h % MOCK_COP.length],
+    arc:  formatARC(t._vr),
+    // XFL: extended cleared flight level (mock: CFL + 1000)
+    xfl:  formatFL(t.altitude + altDelta + 1000),
+    // AHDG: assigned heading
+    ahdg: Math.round(((t.heading || 0) + 30) % 360).toString().padStart(3, '0'),
+    // ASP: assigned speed
+    asp:  t.groundspeed ? Math.round(t.groundspeed / 10) * 10 + '' : '',
+    // ADES: destination (mock)
+    ades: MOCK_SI[(h + 3) % MOCK_SI.length],
+    // PEL: pending entry level
+    pel:  formatFL(t.altitude - 2000),
+  };
+}
+
+function assignState(icao) {
+  const h = parseInt(icao.slice(-2), 16);
+  if (h < 26)  return 'urgency';
+  if (h < 77)  return 'coordinated';
+  if (h < 179) return 'assumed';
+  return 'normal';
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// FIELD BUILDERS — returns arrays of {text, dim?} tokens per line
+// Matching the exact layout from the provided screenshots
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * TAGGED FORMAT (default — unselected aircraft)
+ * From tagged.png:
+ *   Line 1: SQI  WARNINGS                       ← row 1
+ *   Line 2: CALLSIGN  SI  WTC                   ← row 2
+ *   Line 3: AFL↓  CRC  ARC  CFL  COP            ← row 3
+ *   Line 4: GS  ASP  AHDG  XFL  ADES  PEL      ← row 4 (mostly dim)
+ *   Line 5: DIAS  DMACH                          ← row 5 (dim)
+ *
+ * Tagged format shows 5 rows but fewer populated fields than detailed.
+ * Gray = dim opacity, active = full colour.
+ */
+function getTaggedLines(track) {
+  const sq     = track.squawk || '';
+  const sqi    = getSQI(sq);
+  const cs     = (track.callsign || track.icao).trim();
+  const wtc    = getWTC(track.callsign);
+  const afl    = formatFL(track.altitude);
+  const trend  = trendChar(track._vr);
+  const crc    = formatCRC(track._vr);
+  const gs     = track.groundspeed ? Math.round(track.groundspeed).toString() : '';
+  const isUrg  = /^(7500|7600|7700)$/.test(sq);
+  const extras = getMockExtras(track);
+
+  // Line 1: SQI  [WARNINGS]
+  const row1 = [];
+  if (sqi) row1.push({ text: sqi, dim: false });
+  if (isUrg) row1.push({ text: 'WARNINGS', dim: false, warn: true });
+  // Always show row 1 even if just SQI
+
+  // Line 2: CALLSIGN  SI  WTC  (SI and WTC dim if no data)
+  const row2 = [];
+  row2.push({ text: cs, dim: false });
+  if (extras.si) row2.push({ text: extras.si, dim: false });   // SI active in tagged
+  if (wtc)       row2.push({ text: wtc, dim: true });           // WTC dim in tagged
+
+  // Line 3: AFL[↓]  CRC  ARC  CFL  COP
+  const row3 = [];
+  if (afl)        row3.push({ text: afl + trend, dim: false });
+  if (crc)        row3.push({ text: crc,          dim: false });
+  if (extras.arc) row3.push({ text: extras.arc,   dim: true  });  // ARC dim in tagged
+  if (extras.cfl) row3.push({ text: extras.cfl,   dim: true  });  // CFL dim
+  if (extras.cop) row3.push({ text: extras.cop,   dim: true  });  // COP dim
+
+  // Line 4: GS  ASP  AHDG  XFL  ADES  PEL
+  const row4 = [];
+  if (gs)           row4.push({ text: gs,           dim: false });
+  if (extras.asp)   row4.push({ text: extras.asp,   dim: true });
+  if (extras.ahdg)  row4.push({ text: extras.ahdg,  dim: true });
+  if (extras.xfl)   row4.push({ text: extras.xfl,   dim: true });
+  if (extras.ades)  row4.push({ text: extras.ades,  dim: true });
+  if (extras.pel)   row4.push({ text: extras.pel,   dim: true });
+
+  // Line 5: DIAS  DMACH (placeholder — dim in tagged, omit if no urgency)
+  const row5 = [];
+  // Only show row5 fields for non-trivial tracks (state-based)
+  if (track._state === 'urgency' || track._state === 'assumed') {
+    row5.push({ text: 'DIAS',  dim: true });
+    row5.push({ text: 'DMACH', dim: true });
+  }
+
+  return [row1, row2, row3, row4, row5].filter(r => r.length > 0);
+}
+
+/**
+ * DETAILED FORMAT (selected aircraft)
+ * From detailed.png:
+ *   Line 1: SQI  WARNINGS
+ *   Line 2: CALLSIGN  SI  ATYP  WTC  +        ← ATYP and + visible
+ *   Line 3: AFL↓  CRC  ARC  CFL  COP          ← ARC and COP active
+ *   Line 4: GS  ASP  AHDG  XFL  ADES  PEL
+ *   Line 5: DIAS  DMACH  DHDG  TRACK
+ *
+ * Detailed shows same 5 rows but MORE fields are active (non-dim).
+ */
+function getDetailedLines(track) {
+  const sq     = track.squawk || '';
+  const sqi    = getSQI(sq);
+  const cs     = (track.callsign || track.icao).trim();
+  const wtc    = getWTC(track.callsign);
+  const atyp   = getATYP(track.callsign);
+  const afl    = formatFL(track.altitude);
+  const trend  = trendChar(track._vr);
+  const crc    = formatCRC(track._vr);
+  const gs     = track.groundspeed ? Math.round(track.groundspeed).toString() : '';
+  const isUrg  = /^(7500|7600|7700)$/.test(sq);
+  const extras = getMockExtras(track);
+
+  // Line 1: SQI  [WARNINGS]
+  const row1 = [];
+  if (sqi) row1.push({ text: sqi, dim: false });
+  if (isUrg) row1.push({ text: 'WARNINGS', dim: false, warn: true });
+
+  // Line 2: CALLSIGN  SI  ATYP  WTC  +
+  // In detailed: SI, ATYP, WTC, + are all ACTIVE (not dim)
+  const row2 = [];
+  row2.push({ text: cs, dim: false });
+  if (extras.si) row2.push({ text: extras.si, dim: false });
+  if (atyp)      row2.push({ text: atyp,      dim: false });
+  if (wtc)       row2.push({ text: wtc,        dim: false });
+  row2.push({ text: '+', dim: false });   // transfer indicator — always shown in detailed
+
+  // Line 3: AFL[↓]  CRC  ARC  CFL  COP — all ACTIVE in detailed
+  const row3 = [];
+  if (afl)        row3.push({ text: afl + trend, dim: false });
+  if (crc)        row3.push({ text: crc,          dim: false });
+  if (extras.arc) row3.push({ text: extras.arc,   dim: false });  // active
+  if (extras.cfl) row3.push({ text: extras.cfl,   dim: false });  // active
+  if (extras.cop) row3.push({ text: extras.cop,   dim: true  });  // still dim
+
+  // Line 4: GS  ASP  AHDG  XFL  ADES  PEL — GS active, rest dim
+  const row4 = [];
+  if (gs)           row4.push({ text: gs,           dim: false });
+  if (extras.asp)   row4.push({ text: extras.asp,   dim: true });
+  if (extras.ahdg)  row4.push({ text: extras.ahdg,  dim: true });
+  if (extras.xfl)   row4.push({ text: extras.xfl,   dim: true });
+  if (extras.ades)  row4.push({ text: extras.ades,  dim: true });
+  if (extras.pel)   row4.push({ text: extras.pel,   dim: true });
+
+  // Line 5: DIAS  DMACH  DHDG  TRACK — all dim in detailed
+  const row5 = [];
+  row5.push({ text: 'DIAS',  dim: true });
+  row5.push({ text: 'DMACH', dim: true });
+  row5.push({ text: 'DHDG',  dim: true });
+  row5.push({ text: 'TRACK', dim: true });
+
+  return [row1, row2, row3, row4, row5].filter(r => r.length > 0);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// CORE TAG DRAWING — TRANSPARENT, TEXT-COLOUR ONLY
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * drawTag(ctx, track, x, y, isSelected)
+ *
+ * Renders a transparent multi-line iCAS2 tag next to the aircraft symbol.
+ * No background boxes — colour is encoded in text only.
+ *
+ * isSelected=false → tagged format   (5 rows, some fields dim)
+ * isSelected=true  → detailed format (5 rows, more fields active)
+ */
+function drawTag(ctx, track, x, y, isSelected) {
+  const dpr       = window.devicePixelRatio || 1;
+  const baseFontPx = isSelected ? 12 : 11;
+  const fs        = Math.round(baseFontPx * dpr);
+  const lineH     = Math.round((baseFontPx + 3) * dpr);  // row pitch
+  const colGap    = Math.round(5 * dpr);                  // gap between tokens
+
+  const fullColor = getTagColor(track.squawk);
+  const dimColor  = getDimColor(track.squawk);
+  const warnColor = '#ff4444';   // WARNINGS always red regardless of squawk
+
+  const font     = `${isSelected ? 'bold ' : ''}${fs}px 'Courier New',monospace`;
+  const fontBold = `bold ${fs}px 'Courier New',monospace`;
+
+  ctx.save();
+  ctx.font         = font;
+  ctx.textBaseline = 'top';
+  ctx.textAlign    = 'left';
+
+  const lines = isSelected ? getDetailedLines(track) : getTaggedLines(track);
+
+  // Offset: tag appears upper-right of the aircraft symbol
+  const TX = x + Math.round(12 * dpr);
+  const TY = y - Math.round(lineH * (lines.length * 0.5));
+
+  // Thin connector line from symbol to tag anchor
+  ctx.strokeStyle = fullColor;
+  ctx.globalAlpha = 0.35;
+  ctx.lineWidth   = dpr * 0.8;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(TX, TY + lineH);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  // Draw each row
+  lines.forEach((tokens, rowIdx) => {
+    let curX = TX;
+    const rowY = TY + rowIdx * lineH;
+
+    tokens.forEach((tok) => {
+      // Choose colour per token
+      if (tok.warn) {
+        ctx.fillStyle = warnColor;
+        ctx.font      = fontBold;
+      } else if (tok.dim) {
+        ctx.fillStyle = dimColor;
+        ctx.font      = font;
+      } else {
+        ctx.fillStyle = fullColor;
+        ctx.font      = isSelected ? fontBold : font;
+      }
+
+      ctx.fillText(tok.text, curX, rowY);
+      curX += ctx.measureText(tok.text).width + colGap;
+    });
+  });
+
+  // Selected: draw a small selection marker on the symbol
+  if (isSelected) {
+    ctx.strokeStyle = fullColor;
+    ctx.lineWidth   = dpr * 1.5;
+    ctx.globalAlpha = 0.7;
+    ctx.beginPath();
+    ctx.arc(x, y, Math.round(10 * dpr), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  ctx.restore();
+}
+
+// Legacy wrappers (called from render loop)
+function drawICAS2Untagged(ctx, track, x, y) { drawTag(ctx, track, x, y, false); }
+function drawICAS2Tagged(ctx, track, x, y)   { drawTag(ctx, track, x, y, true);  }
+
+// ═══════════════════════════════════════════════════════════════════════
 // ATC SCANNER STATE
 // ═══════════════════════════════════════════════════════════════════════
 
-// Internal frequency in kHz (allows fractional kHz like 8.33)
-let freq = 118425;   // 118.425 MHz
+let freq = 118425;   // kHz
 
-// Step-cycle state
-// NORMAL sequence:  5 → 8.33 → 25 → 5 ...
-// INVERT sequence: 25 → 8.33 →  5 → 25 ...
 const STEP_NORMAL = [5, 8.33, 25];
 const STEP_INVERT = [25, 8.33, 5];
 
-let stepSequence = 'NORMAL';   // 'NORMAL' | 'INVERT'
-let stepPosIndex = 0;          // index into current positive-step sequence
-let stepNegIndex = 0;          // index into current negative-step sequence
+let stepSequence = 'NORMAL';
+let stepPosIndex = 0;
+let stepNegIndex = 0;
 
-// Memory channels (kHz) — EDDW / EDDH defaults
 let memory = {
-  APP: 118425,   // 118.425 MHz  Bremen App / Approach
-  TWR: 118750,   // 118.750 MHz  Bremen Tower
-  GND: 121875,   // 121.875 MHz  Bremen Ground
-  DEL: 121300,   // 121.300 MHz  Bremen Delivery
-  CTR: 128425,   // 128.425 MHz  Bremen CTR / Radar
+  APP: 118425,
+  TWR: 118750,
+  GND: 121875,
+  DEL: 121300,
+  CTR: 128425,
 };
-let activeMemKey = 'APP';   // which memory slot is currently active
-
-// Mute state
+let activeMemKey = 'APP';
 let isMuted = false;
-
-// ── Waterfall freq tracking
-let wfCentreFreq = freq;   // kHz, updated on each retune
+let wfCentreFreq = freq;
 
 // ═══════════════════════════════════════════════════════════════════════
 // GENERAL APPLICATION STATE
@@ -111,212 +439,14 @@ const logBody      = document.getElementById('log-body');
 const wfTuneLine   = document.getElementById('wf-tune-line');
 
 // ═══════════════════════════════════════════════════════════════════════
-// iCAS2 FIELD DERIVATION
-// ═══════════════════════════════════════════════════════════════════════
-
-function getSQI(squawk) { return SQI_MAP[squawk] || ''; }
-
-function getWTC(callsign) {
-  if (!callsign) return 'M';
-  return WTC_MAP[callsign.substring(0,3).toUpperCase()] || 'M';
-}
-
-function formatFL(alt) {
-  if (alt == null) return '---';
-  if (alt >= 1000) return 'FL' + Math.round(alt/100).toString().padStart(3,'0');
-  return Math.round(alt) + 'ft';
-}
-
-function formatCRC(vr) {
-  if (vr == null || Math.abs(vr) < 50) return '  ';
-  const h = Math.round(vr/100);
-  return (h >= 0 ? '+' : '') + h.toString().padStart(2,'0');
-}
-
-function trendArrow(vr) {
-  if (vr == null) return '▶';
-  if (vr >  500)  return '▲';
-  if (vr < -500)  return '▼';
-  return '▶';
-}
-
-function assignState(icao) {
-  const h = parseInt(icao.slice(-2), 16);
-  if (h < 26)  return 'urgency';
-  if (h < 77)  return 'coordinated';
-  if (h < 179) return 'assumed';
-  return 'normal';
-}
-
-function getMockExtras(t) {
-  const h = parseInt(t.icao.slice(-3), 16);
-  return {
-    si:  MOCK_SI[h  % MOCK_SI.length],
-    cfl: formatFL(t.altitude + (h % 2 === 0 ? 1000 : -1000)),
-    cop: MOCK_COP[h % MOCK_COP.length],
-    arc: (t._vr > 0 ? '+' : '') + Math.round((t._vr||0)/100).toString().padStart(3,'0'),
-  };
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// iCAS2 LABEL DRAWING — UNTAGGED (default)
-// Format: SQI  CALLSIGN  [WTC]  AFL  trend  CRC  CFL  GS
-// ═══════════════════════════════════════════════════════════════════════
-function drawICAS2Untagged(ctx, track, x, y) {
-  const dpr   = window.devicePixelRatio || 1;
-  const fs    = Math.round(11 * dpr);
-  const state = track._state || 'normal';
-  const bgCol = STATE_COLORS[state];
-  const isUrg = state === 'urgency';
-
-  const sqi    = getSQI(track.squawk);
-  const cs     = (track.callsign || track.icao).padEnd(6).substring(0,6);
-  const wtc    = getWTC(track.callsign);
-  const afl    = formatFL(track.altitude);
-  const arr    = trendArrow(track._vr);
-  const crc    = formatCRC(track._vr);
-  const extras = getMockExtras(track);
-  const gs     = track.groundspeed != null ? Math.round(track.groundspeed).toString() : '---';
-
-  const parts = [sqi, cs, '['+wtc+']', afl, arr, crc, extras.cfl, gs].filter(Boolean);
-
-  ctx.save();
-  ctx.font = `bold ${fs}px 'Courier New',monospace`;
-
-  const SEP=Math.round(4*dpr), PH=Math.round(5*dpr), PV=Math.round(4*dpr);
-  const lh = fs + PV*2;
-  const ws = parts.map(p => ctx.measureText(p).width);
-  const totalW = ws.reduce((a,b)=>a+b,0) + SEP*(parts.length-1) + PH*2;
-
-  const LX = x + Math.round(14*dpr);
-  const LY = y - Math.round(lh * 0.6);
-
-  ctx.fillStyle = bgCol;
-  roundRect(ctx, LX, LY, totalW, lh, Math.round(2*dpr));
-  ctx.fill();
-
-  if (isUrg) {
-    ctx.strokeStyle='#ffffff'; ctx.lineWidth=dpr*1.5;
-    roundRect(ctx, LX, LY, totalW, lh, Math.round(2*dpr));
-    ctx.stroke();
-  }
-
-  ctx.textBaseline = 'top';
-  let curX = LX + PH;
-  const TY = LY + PV;
-  parts.forEach((p, i) => {
-    ctx.fillStyle = (p === crc && crc.trim()) ?
-      (track._vr > 500 ? '#00ffaa' : '#ff9999') : '#ffffff';
-    ctx.fillText(p, curX, TY);
-    curX += ws[i] + SEP;
-  });
-
-  // Connector
-  ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=dpr*0.6; ctx.globalAlpha=1;
-  ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(LX, LY+lh*0.5); ctx.stroke();
-
-  ctx.restore();
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// iCAS2 LABEL DRAWING — TAGGED (selected)
-// Line 1: SQI  [WARN]  CALLSIGN  SI  [WTC]
-// Line 2: AFL  trend   CRC  ARC  CFL  COP  GS
-// ═══════════════════════════════════════════════════════════════════════
-function drawICAS2Tagged(ctx, track, x, y) {
-  const dpr   = window.devicePixelRatio || 1;
-  const fs    = Math.round(13 * dpr);
-  const state = track._state || 'normal';
-  const bgCol = STATE_COLORS[state];
-  const isUrg = state === 'urgency';
-
-  const sqi    = getSQI(track.squawk);
-  const cs     = (track.callsign || track.icao).padEnd(6).substring(0,6);
-  const wtc    = getWTC(track.callsign);
-  const afl    = formatFL(track.altitude);
-  const arr    = trendArrow(track._vr);
-  const crc    = formatCRC(track._vr);
-  const gs     = track.groundspeed != null ? Math.round(track.groundspeed).toString() : '---';
-  const extras = getMockExtras(track);
-  const warn   = isUrg ? 'STCA!' : '';
-
-  ctx.save();
-  ctx.font = `bold ${fs}px 'Courier New',monospace`;
-
-  const SEP=Math.round(6*dpr), PH=Math.round(7*dpr), PV=Math.round(5*dpr);
-  const lh   = fs + PV*2;
-  const boxH = lh*2 + Math.round(2*dpr);
-
-  const l1 = [sqi, warn, cs, extras.si, '['+wtc+']'].filter(Boolean);
-  const l2 = [afl, arr, crc, extras.arc, extras.cfl, extras.cop, gs].filter(Boolean);
-  const w1 = l1.map(p=>ctx.measureText(p).width);
-  const w2 = l2.map(p=>ctx.measureText(p).width);
-  const totalW = Math.max(
-    w1.reduce((a,b)=>a+b,0)+SEP*(l1.length-1),
-    w2.reduce((a,b)=>a+b,0)+SEP*(l2.length-1)
-  ) + PH*2;
-
-  const LX = x + Math.round(16*dpr);
-  const LY = y - Math.round(boxH*0.7);
-
-  ctx.fillStyle = bgCol;
-  roundRect(ctx, LX, LY, totalW, boxH, Math.round(3*dpr));
-  ctx.fill();
-
-  ctx.strokeStyle='#ffee00'; ctx.lineWidth=dpr*2;
-  roundRect(ctx, LX, LY, totalW, boxH, Math.round(3*dpr));
-  ctx.stroke();
-
-  const divY = LY + lh;
-  ctx.strokeStyle='rgba(255,255,255,0.22)'; ctx.lineWidth=dpr;
-  ctx.beginPath(); ctx.moveTo(LX+PH*0.5,divY); ctx.lineTo(LX+totalW-PH*0.5,divY); ctx.stroke();
-
-  ctx.textBaseline='top';
-  // Line 1
-  let cx = LX+PH;
-  l1.forEach((p,i) => {
-    ctx.fillStyle = (p===warn&&warn) ? '#ffee00' : (p==='['+wtc+']') ? '#aaffcc' : '#ffffff';
-    ctx.fillText(p, cx, LY+PV);
-    cx += w1[i]+SEP;
-  });
-  // Line 2
-  cx = LX+PH;
-  l2.forEach((p,i) => {
-    ctx.fillStyle = (p===crc&&crc.trim()) ?
-      (track._vr>500?'#00ffaa':'#ff9999') : '#ffffff';
-    ctx.fillText(p, cx, divY+PV);
-    cx += w2[i]+SEP;
-  });
-
-  ctx.strokeStyle='rgba(255,238,0,0.55)'; ctx.lineWidth=dpr*0.8;
-  ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(LX, LY+boxH*0.5); ctx.stroke();
-
-  ctx.restore();
-}
-
-function roundRect(c,x,y,w,h,r) {
-  c.beginPath();
-  c.moveTo(x+r,y); c.lineTo(x+w-r,y); c.quadraticCurveTo(x+w,y,x+w,y+r);
-  c.lineTo(x+w,y+h-r); c.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
-  c.lineTo(x+r,y+h); c.quadraticCurveTo(x,y+h,x,y+h-r);
-  c.lineTo(x,y+r); c.quadraticCurveTo(x,y,x+r,y);
-  c.closePath();
-}
-
-// ═══════════════════════════════════════════════════════════════════════
 // ATC SCANNER ENGINE
 // ═══════════════════════════════════════════════════════════════════════
 
-/**
- * Core tune function — all frequency changes go through here.
- * @param {number} khz  New frequency in kHz (fractional OK, e.g. 118008.33)
- */
 function setFreq(khz) {
-  // Clamp to VHF aeronautical band 118.000–137.000 MHz
   freq = Math.max(118000, Math.min(137000, khz));
   updateFreqDisplay();
   wfCentreFreq = freq;
-  wfHistory = [];   // clear waterfall so it redraws centred on new freq
+  wfHistory = [];
   updateWfAxis();
   updateStatusPills();
 }
@@ -326,14 +456,12 @@ function updateFreqDisplay() {
 }
 
 function updateWfAxis() {
-  const fMhz = freq / 1000;
-  const bw = 0.5;  // ±0.5 MHz shown
+  const fMhz = freq / 1000, bw = 0.5;
   document.getElementById('wf-f0').textContent = (fMhz - bw).toFixed(3);
   document.getElementById('wf-fc').textContent = fMhz.toFixed(3);
   document.getElementById('wf-f2').textContent = (fMhz + bw).toFixed(3);
 }
 
-/** Step UP: cycles through the active sequence on repeated presses */
 function stepUp() {
   const seq = stepSequence === 'NORMAL' ? STEP_NORMAL : STEP_INVERT;
   stepPosIndex = (stepPosIndex + 1) % seq.length;
@@ -343,7 +471,6 @@ function stepUp() {
   log('Step +' + step + ' kHz → ' + (freq/1000).toFixed(3) + ' MHz', 'info');
 }
 
-/** Step DOWN: cycles through the active sequence on repeated presses */
 function stepDown() {
   const seq = stepSequence === 'NORMAL' ? STEP_NORMAL : STEP_INVERT;
   stepNegIndex = (stepNegIndex + 1) % seq.length;
@@ -353,40 +480,26 @@ function stepDown() {
   log('Step −' + step + ' kHz → ' + (freq/1000).toFixed(3) + ' MHz', 'info');
 }
 
-/** Direct step (from explicit −25 / −8.33 / −5 / +5 / +8.33 / +25 buttons) */
 function directStep(khz) {
   setFreq(freq + khz);
   flashStepBtn(Math.abs(khz), khz > 0 ? '+' : '-');
-  log((khz>0?'Step +':'Step ') + khz + ' kHz → ' + (freq/1000).toFixed(3) + ' MHz', 'info');
+  log((khz > 0 ? 'Step +' : 'Step ') + khz + ' kHz → ' + (freq/1000).toFixed(3) + ' MHz', 'info');
 }
 
-/** Toggle step-sequence mode NORMAL ↔ INVERT */
 function toggleINV() {
   stepSequence = stepSequence === 'NORMAL' ? 'INVERT' : 'NORMAL';
   stepPosIndex = 0;
   stepNegIndex = 0;
-  const btn = document.getElementById('btn-inv');
+  const btn  = document.getElementById('btn-inv');
   const pill = document.getElementById('pill-inv');
-  if (stepSequence === 'INVERT') {
-    btn.classList.add('active');
-    pill.classList.add('on');
-    pill.textContent = 'INV';
-  } else {
-    btn.classList.remove('active');
-    pill.classList.remove('on');
-    pill.textContent = 'NORM';
-  }
-  log('Step sequence: ' + stepSequence + ' (' + (stepSequence==='NORMAL'?'5→8.33→25':'25→8.33→5') + ')', 'info');
+  const isInv = stepSequence === 'INVERT';
+  btn.classList.toggle('active', isInv);
+  pill.classList.toggle('on', isInv);
+  pill.textContent = isInv ? 'INV' : 'NORM';
+  log('Step sequence: ' + stepSequence + ' (' + (isInv ? '25→8.33→5' : '5→8.33→25') + ')', 'info');
 }
 
-/**
- * Tune a memory channel.
- * Single-click → tune to stored freq.
- * Long-press (>500 ms) → store current freq into that channel.
- */
 function tuneMemory(key) {
-  const prevFreq = memory[key];
-  // Store current freq into the OLD active channel before switching
   if (activeMemKey && activeMemKey !== key) {
     memory[activeMemKey] = freq;
     updateMemButton(activeMemKey);
@@ -405,12 +518,11 @@ function storeMemory(key) {
 }
 
 function updateMemButton(key) {
-  const k = key.toLowerCase();
+  const k   = key.toLowerCase();
   const btn = document.getElementById('mem-' + k);
   const fEl = document.getElementById('mf-' + k);
   if (!btn || !fEl) return;
   fEl.textContent = (memory[key]/1000).toFixed(3);
-  // Active highlight
   document.querySelectorAll('.mem-btn').forEach(b => b.classList.remove('active-mem'));
   if (key === activeMemKey) btn.classList.add('active-mem');
 }
@@ -424,26 +536,22 @@ function updateStatusPills() {
   document.getElementById('pill-active').classList.toggle('on', !isMuted);
 }
 
-// Visual feedback helpers
 function flashStepBtn(step, dir) {
-  // Map step value → button id
   const map = { '5': dir==='+'?'b-p5':'b-m5', '8.33': dir==='+'?'b-p833':'b-m833', '25': dir==='+'?'b-p25':'b-m25' };
-  const id  = map[String(step)];
-  const el  = id && document.getElementById(id);
+  const el  = map[String(step)] && document.getElementById(map[String(step)]);
   if (!el) return;
   const cls = dir === '+' ? 'flash-pos' : 'flash-neg';
   el.classList.add(cls);
   setTimeout(() => el.classList.remove(cls), 180);
 }
 
-function flashMemBtn(key, type) {
+function flashMemBtn(key) {
   const btn = document.getElementById('mem-' + key.toLowerCase());
   if (!btn) return;
   btn.classList.add('store-flash');
   setTimeout(() => btn.classList.remove('store-flash'), 900);
 }
 
-// Mute toggle
 function toggleMute() {
   isMuted = !isMuted;
   const btn = document.getElementById('btn-mute');
@@ -453,53 +561,28 @@ function toggleMute() {
   log(isMuted ? 'Audio muted' : 'Audio unmuted', 'warn');
 }
 
-// ── Wire up ATC scanner buttons ──────────────────────────────────────
 function initATCControls() {
-  // Direct step buttons — each has data-step and data-dir
   document.querySelectorAll('.step-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      const step = parseFloat(btn.dataset.step);
-      const dir  = parseInt(btn.dataset.dir);
-      directStep(step * dir);
+      directStep(parseFloat(btn.dataset.step) * parseInt(btn.dataset.dir));
     });
   });
 
-  // INV button
   document.getElementById('btn-inv').addEventListener('click', toggleINV);
-
-  // Mute button
   document.getElementById('btn-mute').addEventListener('click', toggleMute);
 
-  // Memory buttons — click = tune, contextmenu / long-press = store
   document.querySelectorAll('.mem-btn').forEach(btn => {
     const key = btn.dataset.key;
     let pressTimer = null;
-
-    // Short click → tune
     btn.addEventListener('click', () => tuneMemory(key));
-
-    // Long press (500ms) → store current freq
     btn.addEventListener('mousedown', () => {
-      pressTimer = setTimeout(() => {
-        pressTimer = null;
-        storeMemory(key);
-      }, 600);
+      pressTimer = setTimeout(() => { pressTimer = null; storeMemory(key); }, 600);
     });
-    btn.addEventListener('mouseup', () => {
-      if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
-    });
-    btn.addEventListener('mouseleave', () => {
-      if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
-    });
-
-    // Right-click → store (alternative to long-press)
-    btn.addEventListener('contextmenu', e => {
-      e.preventDefault();
-      storeMemory(key);
-    });
+    btn.addEventListener('mouseup',   () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } });
+    btn.addEventListener('mouseleave',() => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } });
+    btn.addEventListener('contextmenu', e => { e.preventDefault(); storeMemory(key); });
   });
 
-  // Volume + Squelch sliders
   document.getElementById('vol-slider').addEventListener('input', function() {
     document.getElementById('vol-val').textContent = (+this.value >= 0 ? '+' : '') + this.value + ' dB';
   });
@@ -507,7 +590,6 @@ function initATCControls() {
     document.getElementById('sql-val').textContent = (+this.value >= 0 ? '+' : '') + this.value + ' dB';
   });
 
-  // Initial state
   updateAllMemButtons();
   updateStatusPills();
   updateFreqDisplay();
@@ -524,7 +606,7 @@ function connectWebSocket() {
   log('Connecting to ' + BACKEND_WS_URL + '…', 'info');
   let ws;
   try { ws = new WebSocket(BACKEND_WS_URL); }
-  catch (e) { log('WebSocket unavailable — mock mode', 'warn'); startMock(); return; }
+  catch(e) { log('WebSocket unavailable — mock mode', 'warn'); startMock(); return; }
 
   const timeout = setTimeout(() => {
     if (ws.readyState !== WebSocket.OPEN) {
@@ -535,7 +617,7 @@ function connectWebSocket() {
 
   ws.onopen    = () => { clearTimeout(timeout); setConnStatus('live'); log('LIVE data connected', 'ok'); };
   ws.onmessage = e => {
-    try { const m=JSON.parse(e.data); if (m.type==='tracks') handleTracksMessage(m.tracks); }
+    try { const m=JSON.parse(e.data); if(m.type==='tracks') handleTracksMessage(m.tracks); }
     catch(err) { log('Parse error: '+err.message,'error'); }
   };
   ws.onerror   = () => { clearTimeout(timeout); log('WS error — mock mode','warn'); startMock(); };
@@ -563,14 +645,12 @@ function setConnStatus(state) {
   const badge = document.getElementById('conn-badge');
   badge.className = 'badge badge-' + state;
   document.getElementById('conn-label').textContent =
-    {connecting:'CONNECTING', live:'LIVE', mock:'MOCK'}[state] || state.toUpperCase();
+    { connecting:'CONNECTING', live:'LIVE', mock:'MOCK' }[state] || state.toUpperCase();
 }
 
-// Mock aircraft
 const MOCK_CALLS   = ['DLH123','BAW456','EZY789','RYR321','AFR654','KLM987','UAE112','THY334','SAS556','IBE778','SWR990','AUA112'];
 const MOCK_SQUAWKS = ['7000','7000','7000','7000','2000','1200','7500','7600','7700','7000','2000','7000'];
-let mockAc    = [];
-let mockTimer = null;
+let mockAc = [], mockTimer = null;
 
 function startMock() {
   if (mockTimer) return;
@@ -647,7 +727,6 @@ function resize() {
   const rw=document.getElementById('radar-wrap'), dpr=window.devicePixelRatio||1;
   canvas.width=rw.clientWidth*dpr; canvas.height=rw.clientHeight*dpr;
   canvas.style.width=rw.clientWidth+'px'; canvas.style.height=rw.clientHeight+'px';
-
   const wb=document.getElementById('wf-body');
   const wh=Math.max(1,wb.clientHeight-14);
   wfCanvas.width=wb.clientWidth*dpr; wfCanvas.height=wh*dpr;
@@ -666,8 +745,7 @@ const RINGS=[5,10,20,40,80,120];
 function render(ts) {
   requestAnimationFrame(render);
   if (ts-lastTs<33) return;
-  lastTs=ts;
-  pulsePhase=(pulsePhase+0.055)%(Math.PI*2);
+  lastTs=ts; pulsePhase=(pulsePhase+0.055)%(Math.PI*2);
 
   const W=canvas.width, H=canvas.height, dpr=window.devicePixelRatio||1;
   ctx.clearRect(0,0,W,H);
@@ -686,10 +764,11 @@ function render(ts) {
   ctx.strokeStyle='rgba(0,170,170,0.07)'; ctx.lineWidth=0.7;
   for (let a=0;a<360;a+=30) {
     const r=(a-90)*Math.PI/180;
-    ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(cx+Math.cos(r)*len, cy+Math.sin(r)*len); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx,cy);
+    ctx.lineTo(cx+Math.cos(r)*len,cy+Math.sin(r)*len); ctx.stroke();
   }
 
-  // Range rings (#00aaaa @ 40%)
+  // Range rings — #00aaaa @ 40% opacity
   RINGS.forEach(nm => {
     const r=(nm*NM_TO_M/mpp)*viewScale;
     if (r<8||r>Math.max(W,H)) return;
@@ -708,12 +787,14 @@ function render(ts) {
 
   // Centre cross
   const s=8*dpr;
-  ctx.strokeStyle='#ffffff'; ctx.lineWidth=1; ctx.globalAlpha=0.6;
-  ctx.beginPath(); ctx.moveTo(cx-s,cy); ctx.lineTo(cx+s,cy); ctx.moveTo(cx,cy-s); ctx.lineTo(cx,cy+s); ctx.stroke();
-  ctx.beginPath(); ctx.arc(cx,cy,2*dpr,0,Math.PI*2); ctx.fillStyle='#ffffff'; ctx.fill();
+  ctx.strokeStyle='#ffffff'; ctx.lineWidth=1; ctx.globalAlpha=0.55;
+  ctx.beginPath(); ctx.moveTo(cx-s,cy); ctx.lineTo(cx+s,cy);
+  ctx.moveTo(cx,cy-s); ctx.lineTo(cx,cy+s); ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx,cy,2*dpr,0,Math.PI*2);
+  ctx.fillStyle='#ffffff'; ctx.fill();
   ctx.globalAlpha=1;
 
-  // Tracks
+  // Aircraft symbols + tags
   const margin=80*dpr;
   for (const [icao,t] of tracks) {
     if (t.lat==null) continue;
@@ -729,31 +810,37 @@ function render(ts) {
 }
 
 function drawAircraftSymbol(sx,sy,t,isSel,dpr,mpp) {
+  const tagCol = getTagColor(t.squawk);
+
   // Velocity vector
   if (t.groundspeed!=null&&t.heading!=null) {
-    const pxnm=NM_TO_M/mpp*viewScale, lead=(t.groundspeed/60)*2*pxnm, ang=(t.heading-90)*Math.PI/180;
+    const pxnm=NM_TO_M/mpp*viewScale, lead=(t.groundspeed/60)*2*pxnm;
+    const ang=(t.heading-90)*Math.PI/180;
     ctx.beginPath(); ctx.moveTo(sx,sy); ctx.lineTo(sx+Math.cos(ang)*lead,sy+Math.sin(ang)*lead);
-    ctx.strokeStyle=isSel?'rgba(255,238,0,0.55)':'rgba(255,255,255,0.28)';
-    ctx.lineWidth=dpr; ctx.setLineDash([3*dpr,4*dpr]); ctx.stroke(); ctx.setLineDash([]);
+    ctx.strokeStyle=tagCol; ctx.globalAlpha=isSel?0.60:0.30;
+    ctx.lineWidth=dpr; ctx.setLineDash([3*dpr,4*dpr]); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha=1;
   }
-  // Glow
+
+  // Glow for selected
   if (isSel) {
     const gw=16*dpr+Math.sin(pulsePhase)*5*dpr;
     const g=ctx.createRadialGradient(sx,sy,0,sx,sy,gw);
-    g.addColorStop(0,'rgba(255,238,0,0.28)'); g.addColorStop(1,'rgba(255,238,0,0)');
+    g.addColorStop(0,'rgba(102,204,255,0.20)'); g.addColorStop(1,'rgba(102,204,255,0)');
     ctx.beginPath(); ctx.arc(sx,sy,gw,0,Math.PI*2); ctx.fillStyle=g; ctx.fill();
   }
-  // Chevron: green fill (#00ff88), white/yellow stroke
+
+  // Chevron — fill: #00ff88, stroke: tag colour
   const sz=(isSel?9:6)*dpr;
   ctx.save(); ctx.translate(sx,sy); ctx.rotate(t.heading*Math.PI/180);
   ctx.beginPath(); ctx.moveTo(0,-sz*1.8); ctx.lineTo(sz,0); ctx.lineTo(0,sz*0.85); ctx.lineTo(-sz,0); ctx.closePath();
   ctx.fillStyle='#00ff88';
-  ctx.strokeStyle=isSel?'#ffee00':'#ffffff'; ctx.lineWidth=dpr*(isSel?2:1.2);
+  ctx.strokeStyle=isSel?tagCol:'#ffffff'; ctx.lineWidth=dpr*(isSel?2:1.2);
   ctx.fill(); ctx.stroke(); ctx.restore();
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// WATERFALL / FFT (animated — freq-tracked)
+// WATERFALL / FFT (animated, freq-tracked)
 // ═══════════════════════════════════════════════════════════════════════
 
 function renderWaterfall() {
@@ -761,36 +848,30 @@ function renderWaterfall() {
   if (W<=0||H<=0) return;
   wfPhase+=0.03;
 
-  // Centre of spectrum display follows wfCentreFreq
-  // Peaks are placed relative to it so they shift when you retune
+  const bwMhz=1.0, fc=wfCentreFreq/1000;
+
+  function peakAt(fMhz, amp) {
+    return (x) => { const dx=((fMhz-fc)/bwMhz)*2; return amp*Math.exp(-Math.pow((x-dx)/0.04,2)); };
+  }
+
+  const peaks=[
+    peakAt(fc,       0.70*(0.65+0.35*Math.sin(wfPhase))),
+    peakAt(fc+0.10,  0.28*(0.35+0.25*Math.sin(wfPhase*1.4+1))),
+    peakAt(fc-0.20,  0.15*(0.20+0.15*Math.sin(wfPhase*0.8+2))),
+    peakAt(fc+0.35,  0.10*(0.15+0.10*Math.sin(wfPhase*1.1+3))),
+  ];
 
   const row=new Uint8ClampedArray(W*4);
   for (let i=0;i<W;i++) {
-    const x=(i/W-0.5)*2;  // -1..+1 across ±0.5 MHz BW
-
-    // Signal peaks anchored to fixed absolute frequencies (move in x when we tune)
-    const bwMhz=1.0;
-    const fc=wfCentreFreq/1000;
-
-    function peakAt(fMhz, amp) {
-      const dx=((fMhz-fc)/bwMhz)*2;  // normalised offset
-      return amp*Math.exp(-Math.pow((x-dx)/0.04,2));
-    }
-
+    const x=(i/W-0.5)*2;
     let p=0.04+0.05*Math.random();
-    // Main carrier at centre freq
-    p+=peakAt(fc, 0.70*(0.65+0.35*Math.sin(wfPhase)));
-    // Adjacent channels
-    p+=peakAt(fc+0.1, 0.28*(0.35+0.25*Math.sin(wfPhase*1.4+1)));
-    p+=peakAt(fc-0.2, 0.15*(0.20+0.15*Math.sin(wfPhase*0.8+2)));
-    p+=peakAt(fc+0.35, 0.10*(0.15+0.10*Math.sin(wfPhase*1.1+3)));
+    peaks.forEach(fn => p+=fn(x));
     p=Math.min(1,p);
-
     let r,g,b;
-    if      (p<0.15) { r=0;              g=Math.round(p/0.15*60);      b=Math.round(p/0.15*90); }
-    else if (p<0.40) { const t=(p-0.15)/0.25; r=0;              g=Math.round(60+t*110);    b=Math.round(90+t*80); }
-    else if (p<0.70) { const t=(p-0.40)/0.30; r=Math.round(t*30);     g=Math.round(170+t*85);  b=Math.round(170-t*50); }
-    else             { const t=(p-0.70)/0.30; r=Math.round(30+t*225);  g=255;                   b=Math.round(120-t*80); }
+    if      (p<0.15) { r=0;              g=Math.round(p/0.15*60);     b=Math.round(p/0.15*90); }
+    else if (p<0.40) { const t=(p-0.15)/0.25; r=0;              g=Math.round(60+t*110);   b=Math.round(90+t*80); }
+    else if (p<0.70) { const t=(p-0.40)/0.30; r=Math.round(t*30);    g=Math.round(170+t*85); b=Math.round(170-t*50); }
+    else             { const t=(p-0.70)/0.30; r=Math.round(30+t*225); g=255;                  b=Math.round(120-t*80); }
     const idx=i*4; row[idx]=r; row[idx+1]=g; row[idx+2]=b; row[idx+3]=255;
   }
   wfHistory.unshift(row);
@@ -798,59 +879,49 @@ function renderWaterfall() {
 
   const specH=Math.floor(H*0.38);
   const imgData=wfCtx.createImageData(W,H);
-  for (let rr=0;rr<wfHistory.length&&rr<H;rr++) {
-    if (rr<specH) continue;
-    imgData.data.set(wfHistory[rr],rr*W*4);
+  for (let r=0;r<wfHistory.length&&r<H;r++) {
+    if (r<specH) continue;
+    imgData.data.set(wfHistory[r],r*W*4);
   }
   wfCtx.putImageData(imgData,0,0);
 
-  // Spectrum zone bg
   wfCtx.fillStyle='rgba(10,10,10,0.93)'; wfCtx.fillRect(0,0,W,specH);
 
-  // Grid
   wfCtx.strokeStyle='rgba(0,130,100,0.12)'; wfCtx.lineWidth=1;
   for (let db=0;db<=4;db++) { const y=specH*(1-db/4); wfCtx.beginPath(); wfCtx.moveTo(0,y); wfCtx.lineTo(W,y); wfCtx.stroke(); }
   wfCtx.strokeStyle='rgba(0,130,100,0.08)'; wfCtx.lineWidth=0.5;
   for (let f=0;f<=8;f++) { const x=W*f/8; wfCtx.beginPath(); wfCtx.moveTo(x,0); wfCtx.lineTo(x,specH); wfCtx.stroke(); }
 
-  // Spectrum FFT line (same peak positions as waterfall row)
-  const bwMhz=1.0, fc=wfCentreFreq/1000;
-  function specPeakAt(fMhz, amp) {
-    return function(x) { const dx=((fMhz-fc)/bwMhz)*2; return amp*Math.exp(-Math.pow((x-dx)/0.04,2)); };
-  }
-  const specFns=[
-    specPeakAt(fc,       0.85*(0.65+0.35*Math.sin(wfPhase))),
-    specPeakAt(fc+0.10,  0.32*(0.35+0.25*Math.sin(wfPhase*1.4+1))),
-    specPeakAt(fc-0.20,  0.18*(0.20+0.15*Math.sin(wfPhase*0.8+2))),
-    specPeakAt(fc+0.35,  0.10*(0.15+0.10*Math.sin(wfPhase*1.1+3))),
+  const specPeaks=[
+    peakAt(fc,       0.85*(0.65+0.35*Math.sin(wfPhase))),
+    peakAt(fc+0.10,  0.32*(0.35+0.25*Math.sin(wfPhase*1.4+1))),
+    peakAt(fc-0.20,  0.18*(0.20+0.15*Math.sin(wfPhase*0.8+2))),
+    peakAt(fc+0.35,  0.10*(0.15+0.10*Math.sin(wfPhase*1.1+3))),
   ];
   wfCtx.beginPath(); wfCtx.moveTo(0,specH);
   for (let i=0;i<W;i++) {
     const x=(i/W-0.5)*2;
     let p=0.04+0.02*Math.random();
-    specFns.forEach(fn => p+=fn(x));
+    specPeaks.forEach(fn => p+=fn(x));
     p=Math.min(1,p);
     wfCtx.lineTo(i,specH*(1-p*0.92));
   }
   wfCtx.strokeStyle='rgba(0,220,200,0.90)'; wfCtx.lineWidth=1.5; wfCtx.stroke();
 
-  // Separator
   wfCtx.strokeStyle='rgba(0,170,170,0.25)'; wfCtx.lineWidth=1;
   wfCtx.beginPath(); wfCtx.moveTo(0,specH); wfCtx.lineTo(W,specH); wfCtx.stroke();
 
-  // Centre tune marker — WHITE solid line
+  // White centre tune marker
   wfCtx.strokeStyle='rgba(255,255,255,0.80)'; wfCtx.lineWidth=1.5;
   wfCtx.beginPath(); wfCtx.moveTo(W/2,0); wfCtx.lineTo(W/2,H); wfCtx.stroke();
-  // Small notch at top
-  wfCtx.fillStyle='#ffffff';
-  wfCtx.fillRect(W/2-4,0,8,4);
+  wfCtx.fillStyle='#ffffff'; wfCtx.fillRect(W/2-4,0,8,4);
 
   updateWfAxis();
 }
 setInterval(renderWaterfall, 80);
 
 // ═══════════════════════════════════════════════════════════════════════
-// MOUSE / ZOOM INTERACTIONS
+// MOUSE / ZOOM
 // ═══════════════════════════════════════════════════════════════════════
 
 const radarWrap=document.getElementById('radar-wrap');
@@ -896,10 +967,12 @@ function hitTest(ex,ey) {
 }
 
 function selectTrack(icao) {
-  if (selected===icao) { selected=null; selEmpty.style.display=''; selDetail.style.display='none'; return; }
+  if (selected===icao) {
+    selected=null; selEmpty.style.display=''; selDetail.style.display='none'; return;
+  }
   selected=icao; updateSelPanel();
   const t=tracks.get(icao);
-  log('Tagged: '+(t?.callsign||icao)+' ['+(t?._state||'?').toUpperCase()+']','info');
+  log('Selected: '+(t?.callsign||icao)+' ['+getTagColor(t?.squawk)+']','info');
 }
 
 function updateSelPanel() {
@@ -907,23 +980,23 @@ function updateSelPanel() {
   const t=tracks.get(selected);
   if (!t) { selEmpty.style.display=''; selDetail.style.display='none'; selected=null; return; }
   selEmpty.style.display='none'; selDetail.style.display='grid';
-  const fl=formatFL(t.altitude);
   const extras=getMockExtras(t);
   const rows=[
     ['ICAO',t.icao],['CALL',t.callsign||'—'],
     ['SQI',getSQI(t.squawk)||'—'],['SQK',t.squawk||'—'],
-    ['WTC',getWTC(t.callsign)],['AFL',fl],['CFL',extras.cfl],
-    ['V/R',(t._vr>0?'+':'')+t._vr+'fpm'],['CRC',formatCRC(t._vr)],
-    ['ARC',extras.arc],['SI',extras.si],['COP',extras.cop],
+    ['WTC',getWTC(t.callsign)],['ATYP',getATYP(t.callsign)||'—'],
+    ['AFL',formatFL(t.altitude)],['CFL',extras.cfl||'—'],
+    ['V/R',(t._vr>0?'+':'')+t._vr+'fpm'],['CRC',formatCRC(t._vr)||'—'],
+    ['ARC',extras.arc||'—'],['SI',extras.si],['COP',extras.cop],
     ['GS',Math.round(t.groundspeed||0)+'kt'],['HDG',(t.heading|0)+'°'],
-    ['STATE',(t._state||'?').toUpperCase()],
+    ['COL',getTagColor(t.squawk)],
     ['LAT',t.lat?.toFixed(4)+'°'],['LON',t.lon?.toFixed(4)+'°'],
   ];
   selDetail.innerHTML=rows.map(([k,v])=>
     `<span class="sel-key">${k}</span><span class="sel-val ${k==='CALL'?'hi':''}">${v}</span>`
   ).join('');
 }
-setInterval(()=>{ if(selected) updateSelPanel(); }, 1000);
+setInterval(()=>{ if(selected) updateSelPanel(); },1000);
 
 // ═══════════════════════════════════════════════════════════════════════
 // CLOCK
@@ -954,8 +1027,8 @@ function log(msg, type='info') {
 // ═══════════════════════════════════════════════════════════════════════
 
 log('PIRX Console initialised','ok');
-log('ATC Scanner ready — EDDW/EDDH freqs loaded','ok');
-log('Memory: long-press or right-click to store current freq','info');
+log('iCAS2 transparent tags: GREEN=VFR · BLUE=IFR · RED=EMRG · AMBER=MIL','info');
+log('Click aircraft to toggle tagged ↔ detailed format','info');
 
 initATCControls();
 connectWebSocket();
