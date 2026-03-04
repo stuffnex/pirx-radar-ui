@@ -13,6 +13,74 @@ _Changes staged but not yet tagged._
 
 ---
 
+## [0.6.0] — 2026-03-04
+
+### Changed — 6 production improvements across all three files
+
+#### 1. Clean iCAS2 tags — populated fields only
+
+- **Changed** `getTaggedLines(track)` — rebuilt from scratch; only pushes tokens that have actual ADS-B values. Empty fields are never rendered.
+- **Changed** `getDetailedLines(track)` — same principle; secondary row fields (ASP, AHDG, XFL, ADES, PEL) only appear when non-empty.
+- **Changed** AFL + trend + CRC are now merged into a single token (`FL340↓-08` / `FL340`) so the trend arrow is never orphaned.
+- **Changed** tagged row 4 simplified to `GS{value}` prefix, only rendered when groundspeed is present.
+- **Removed** placeholder row 5 (DIAS / DMACH) from the tagged (unselected) format — now only shown in detailed view.
+
+#### 2. Simplified squawk colours
+
+- **Changed** `getTagColor(squawk)` — reduced to three states:
+  - `#ff4444` red — emergency squawks `7500` / `7600` / `7700`
+  - `#00ff88` green — VFR standard `7000`
+  - `#66ccff` light blue — all other codes
+- **Removed** OAT / military amber class (`#ffaa00`) and the `0xxx` regex match.
+- **Changed** `getDimColor()` — updated to match the three-state map.
+
+#### 3. EDDN (Nuremberg) default frequencies
+
+- **Changed** default `freq` from `118425` → `119475` kHz (EDDN Approach).
+- **Changed** `memory` object — all five slots replaced with EDDN frequencies:
+  - `APP 119.475` · `TWR 118.305` · `GND 121.760` · `DEL 121.760` · `CTR 129.525`
+- **Added** `ATIS: 123080` (123.080 MHz — EDDN ATIS) as sixth memory channel.
+- **Changed** `REF_LAT / REF_LON` from EDDW/EDDH (52.52 / 8.53) → EDDN (49.49 / 11.08).
+- **Changed** topbar REF display and `index.html` initial freq display to match.
+
+#### 4. 10 MHz span waterfall, ≤40 fps, EDDN mock peaks
+
+- **Added** `WF_MIN_KHZ = 118000`, `WF_MAX_KHZ = 128000`, `WF_SPAN_KHZ = 10000` — fixed 118–128 MHz display band.
+- **Added** `EDDN_PEAKS[]` — 6 mock signal sources pinned to real EDDN frequencies (APP, TWR, GND/DEL, CTR, ATIS, EMRG guard) with individual amplitudes and phase offsets.
+- **Added** `wfXtoFreq(x, W)` — pixel → kHz linear mapping across the 10 MHz band.
+- **Added** `freqToWfX(khz, W)` — kHz → pixel for tune-marker positioning.
+- **Changed** `renderWaterfall` converted from `setInterval(80ms)` → `requestAnimationFrame` with `wfLastTs` throttle at 25 ms (≤40 fps). Eliminates timer drift.
+- **Changed** waterfall peaks are now anchored to absolute EDDN frequencies rather than relative to the tuned centre frequency — the whole 10 MHz band is always visible.
+- **Changed** tune marker repositioned via `left%` on `#wf-tune-line` div (not canvas draw) for zero-cost updates on frequency change.
+- **Changed** waterfall history no longer cleared on retune — band is fixed, so history remains valid.
+- **Added** vertical grid lines in spectrum zone at every 2 MHz (118 / 120 / 122 … 128).
+- **Changed** `index.html` waterfall axis — replaced 3 dynamic ticks with 6 fixed MHz labels: `118 | 120 | 122 | 124 | 126 | 128`.
+- **Changed** CSS `#wf-freq-axis` — uses `justify-content:space-between` with `flex:1; text-align:center` ticks; old `padding:0 6px` removed.
+- **Changed** bot-title subtitle from `→ Milestone 2` to `118 – 128 MHz · click to tune`.
+
+#### 5. Click-to-tune waterfall + crosshair hover tooltip
+
+- **Added** `click` listener on `#wf-body` — converts click X position to frequency via `wfXtoFreq`, snaps to nearest 8.33 kHz ATC channel, calls `setFreq()`.
+- **Added** `mousemove` listener on `#wf-body` — computes hovered frequency and shows `#wf-tooltip` div floating above the cursor.
+- **Added** `mouseleave` listener — hides tooltip.
+- **Added** `#wf-tooltip` div in `index.html` — positioned absolutely inside `#wf-body`, `transform:translateX(-50%)` keeps it centred on cursor.
+- **Added** CSS `#wf-tooltip` — dark semi-transparent background, cyan border, 9px Courier New, `pointer-events:none`.
+- **Changed** `#wf-body` cursor to `crosshair` in CSS.
+
+#### 6. 6-button memory row, no label
+
+- **Added** `ATIS` as sixth memory channel (`mem-atis` / `mf-atis` / `data-key="ATIS"`) in `index.html`.
+- **Added** `MEM_KEYS = ['APP','TWR','GND','DEL','CTR','ATIS']` array used by `updateAllMemBtns()`.
+- **Removed** `<span class="mem-label">MEM</span>` from `index.html` — label consumed usable button width with no benefit.
+- **Removed** `.mem-label` CSS rule.
+- **Changed** `.mem-btn` — `padding` reduced from `3px 2px` → `2px 1px`; `gap` reduced from `3px` → `2px`.
+- **Changed** `.mem-name` — `font-size` reduced from `9px` → `8px`; `letter-spacing` from `.12em` → `.10em`.
+- **Changed** `.mem-freq` — `font-size` reduced from `8px` → `7px`.
+- **Changed** `.atc-mem-row` gap reduced from `3px` → `2px`.
+- **Changed** active memory button highlight changed from cyan (`var(--cyan)`) → yellow (`var(--yellow)`) border and background for higher contrast across 6 options.
+
+---
+
 ## [0.5.0] — 2026-03-04
 
 ### Changed — iCAS2 label system overhauled (transparent, text-colour only)

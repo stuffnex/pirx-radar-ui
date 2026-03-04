@@ -23,7 +23,7 @@
     <div id="tc-stats">
       <span><span id="track-count" class="hi">0</span> <span class="lbl-dim">TRACKS</span></span>
       <span>RNG <span id="range-nm" class="val">40</span><span class="lbl-dim">NM</span></span>
-      <span><span class="lbl-dim">REF</span> 52°31'N 008°32'E</span>
+      <span><span class="lbl-dim">REF</span> 49°29'N 011°05'E</span>
     </div>
   </div>
   <div id="tr">
@@ -58,10 +58,10 @@
     <div class="bot-title"><span class="bot-icon">◉</span> ATC Scanner</div>
     <div id="sdr-body">
 
-      <!-- Row 1: Frequency display -->
+      <!-- Row 1: Frequency display + status pills -->
       <div class="atc-freq-row">
         <div class="atc-freq-wrap">
-          <div id="freq-display">118.425</div>
+          <div id="freq-display">119.475</div>
           <span class="freq-unit">MHz</span>
         </div>
         <div class="atc-status-pills">
@@ -74,14 +74,14 @@
 
       <!-- Row 2: Step buttons + INV -->
       <div class="atc-step-row">
-        <button class="step-btn neg" id="b-m25"  data-step="25"  data-dir="-1">−25</button>
+        <button class="step-btn neg" id="b-m25"  data-step="25"   data-dir="-1">−25</button>
         <button class="step-btn neg" id="b-m833" data-step="8.33" data-dir="-1">−8.33</button>
-        <button class="step-btn neg" id="b-m5"   data-step="5"   data-dir="-1">−5</button>
+        <button class="step-btn neg" id="b-m5"   data-step="5"    data-dir="-1">−5</button>
         <span class="step-unit">kHz</span>
-        <button class="step-btn pos" id="b-p5"   data-step="5"   data-dir="1">+5</button>
+        <button class="step-btn pos" id="b-p5"   data-step="5"    data-dir="1">+5</button>
         <button class="step-btn pos" id="b-p833" data-step="8.33" data-dir="1">+8.33</button>
-        <button class="step-btn pos" id="b-p25"  data-step="25"  data-dir="1">+25</button>
-        <button class="inv-btn" id="btn-inv" title="Toggle step order (NORM ↔ INV)">INV</button>
+        <button class="step-btn pos" id="b-p25"  data-step="25"   data-dir="1">+25</button>
+        <button class="inv-btn" id="btn-inv" title="Toggle step order NORM ↔ INV">INV</button>
       </div>
 
       <!-- Row 3: Volume + Squelch + Mute -->
@@ -95,47 +95,57 @@
         <button class="mute-btn" id="btn-mute">🔊</button>
       </div>
 
-      <!-- Row 4: Memory buttons -->
+      <!-- Row 4: 6 memory buttons — all in one row, no MEM label -->
       <div class="atc-mem-row">
-        <span class="mem-label">MEM</span>
         <button class="mem-btn" id="mem-app" data-key="APP">
           <span class="mem-name">APP</span>
-          <span class="mem-freq" id="mf-app">118.425</span>
+          <span class="mem-freq" id="mf-app">119.475</span>
         </button>
         <button class="mem-btn" id="mem-twr" data-key="TWR">
           <span class="mem-name">TWR</span>
-          <span class="mem-freq" id="mf-twr">118.750</span>
+          <span class="mem-freq" id="mf-twr">118.305</span>
         </button>
         <button class="mem-btn" id="mem-gnd" data-key="GND">
           <span class="mem-name">GND</span>
-          <span class="mem-freq" id="mf-gnd">121.875</span>
+          <span class="mem-freq" id="mf-gnd">121.760</span>
         </button>
         <button class="mem-btn" id="mem-del" data-key="DEL">
           <span class="mem-name">DEL</span>
-          <span class="mem-freq" id="mf-del">121.300</span>
+          <span class="mem-freq" id="mf-del">121.760</span>
         </button>
         <button class="mem-btn" id="mem-ctr" data-key="CTR">
           <span class="mem-name">CTR</span>
-          <span class="mem-freq" id="mf-ctr">128.425</span>
+          <span class="mem-freq" id="mf-ctr">129.525</span>
+        </button>
+        <button class="mem-btn" id="mem-atis" data-key="ATIS">
+          <span class="mem-name">ATIS</span>
+          <span class="mem-freq" id="mf-atis">123.080</span>
         </button>
       </div>
 
     </div>
   </div><!-- /sdr-section -->
 
-  <!-- FFT / Waterfall -->
+  <!-- FFT / Waterfall — 10 MHz span, click-to-tune -->
   <div class="bot-section" id="wf-section">
     <div class="bot-title">
       <span class="bot-icon">◈</span> FFT / Waterfall
-      <span class="bot-sub">→ Milestone 2</span>
+      <span class="bot-sub">118 – 128 MHz · click to tune</span>
     </div>
     <div id="wf-body">
       <canvas id="wf-canvas"></canvas>
+      <!-- Hover frequency tooltip -->
+      <div id="wf-tooltip"></div>
+      <!-- Tuned-frequency marker (left% set by JS) -->
       <div class="wf-tune-line" id="wf-tune-line"></div>
+      <!-- Axis labels — 6 fixed MHz ticks -->
       <div id="wf-freq-axis">
-        <span class="wf-tick" id="wf-f0">117.925</span>
-        <span class="wf-tick" id="wf-fc">118.425</span>
-        <span class="wf-tick" id="wf-f2">118.925</span>
+        <span class="wf-tick">118</span>
+        <span class="wf-tick">120</span>
+        <span class="wf-tick">122</span>
+        <span class="wf-tick">124</span>
+        <span class="wf-tick">126</span>
+        <span class="wf-tick">128</span>
       </div>
     </div>
   </div><!-- /wf-section -->

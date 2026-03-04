@@ -327,69 +327,78 @@ body { display:flex; flex-direction:column; }
 .mute-btn:hover  { border-color:var(--amber); background:var(--amber-dim); }
 .mute-btn.muted  { border-color:var(--amber); background:rgba(255,136,0,0.28); }
 
-/* Row 4 — Memory buttons */
+/* Row 4 — 6 Memory buttons, no label, compact sizing */
 .atc-mem-row {
-  display:flex; align-items:stretch; gap:3px;
-}
-.mem-label {
-  font-family:var(--font-ui); font-size:8px; font-weight:700;
-  letter-spacing:.2em; color:var(--txt-dim);
-  display:flex; align-items:center; flex-shrink:0; margin-right:2px;
+  display:flex; align-items:stretch; gap:2px;
 }
 
 .mem-btn {
   flex:1;
   display:flex; flex-direction:column; align-items:center;
-  padding:3px 2px; gap:1px;
+  padding:2px 1px; gap:1px;
   background:var(--bg-input); border:1px solid var(--border-sel);
   border-radius:2px; cursor:pointer; transition:all var(--trans);
-  min-width:0;
+  min-width:0; overflow:hidden;
 }
 .mem-btn:hover {
   border-color:var(--cyan); background:var(--cyan-dim);
 }
 .mem-btn.active-mem {
-  border-color:var(--cyan); background:rgba(0,170,170,0.25);
-  box-shadow:0 0 8px rgba(0,170,170,0.30);
+  border-color:var(--yellow); background:rgba(255,238,0,0.14);
+  box-shadow:0 0 7px rgba(255,238,0,0.22);
 }
+.mem-btn.active-mem .mem-name { color:var(--yellow); }
 .mem-btn.store-flash {
   border-color:var(--green) !important;
-  background:rgba(0,255,136,0.30) !important;
-  box-shadow:0 0 10px rgba(0,255,136,0.35) !important;
+  background:rgba(0,255,136,0.28) !important;
+  box-shadow:0 0 9px rgba(0,255,136,0.30) !important;
 }
 
 .mem-name {
-  font-family:var(--font-ui); font-size:9px; font-weight:700;
-  letter-spacing:.12em; color:#ffffff; text-transform:uppercase;
+  font-family:var(--font-ui); font-size:8px; font-weight:700;
+  letter-spacing:.10em; color:#ffffff; text-transform:uppercase;
 }
 .mem-freq {
   font-family:'Courier New',monospace;
-  font-size:8px; font-weight:700;
-  color:var(--cyan); letter-spacing:.02em; white-space:nowrap;
+  font-size:7px; font-weight:700;
+  color:var(--cyan); letter-spacing:.01em; white-space:nowrap;
 }
 
 /* ════════════════════════
-   WATERFALL SECTION
+   WATERFALL SECTION — 10 MHz span
    ════════════════════════ */
 #wf-section { flex:1; min-width:0; }
-#wf-body { flex:1; position:relative; overflow:hidden; background:var(--bg); }
+#wf-body { flex:1; position:relative; overflow:hidden; background:var(--bg); cursor:crosshair; }
 #wf-canvas { display:block; width:100%; height:100%; }
 
+/* Fixed 6-tick axis: 118 | 120 | 122 | 124 | 126 | 128 MHz */
 #wf-freq-axis {
   position:absolute; bottom:0; left:0; right:0; height:14px;
   display:flex; align-items:center; justify-content:space-between;
-  padding:0 6px; pointer-events:none;
-  background:rgba(10,10,10,0.80); border-top:1px solid var(--border);
+  padding:0; pointer-events:none;
+  background:rgba(10,10,10,0.82); border-top:1px solid var(--border);
 }
-.wf-tick { font-size:8px; color:var(--txt-lo); font-family:'Courier New',monospace; }
+.wf-tick {
+  font-size:8px; color:var(--txt-lo); font-family:'Courier New',monospace;
+  flex:1; text-align:center;
+}
 
+/* Tuned-frequency marker — position driven by JS via left% */
 .wf-tune-line {
   position:absolute; top:0; bottom:14px;
-  width:2px; background:rgba(255,255,255,0.70);
+  width:2px; background:rgba(255,255,255,0.80);
   pointer-events:none;
-  box-shadow:0 0 4px rgba(255,255,255,0.40);
-  /* left% set dynamically by JS */
-  left:50%;
+  box-shadow:0 0 4px rgba(255,255,255,0.45);
+}
+
+/* Hover frequency tooltip */
+#wf-tooltip {
+  position:absolute; top:4px;
+  font-family:'Courier New',monospace; font-size:9px; font-weight:700;
+  color:#ffffff; background:rgba(0,0,0,0.72);
+  border:1px solid rgba(0,170,170,0.50);
+  padding:2px 6px; border-radius:2px;
+  pointer-events:none; display:none; white-space:nowrap;
   transform:translateX(-50%);
 }
 
