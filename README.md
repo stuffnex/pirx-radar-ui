@@ -11,25 +11,46 @@ Zero dependencies, zero build step — three static files, any host.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ⬡ PIRX  Radar / SDR Console    ● MOCK   11 TRACKS  EDDN/NUE  40NM  │
+│ ⬡ PIRX  Radar / SDR Console    ● MOCK   11 TRACKS  EDDN/NUE  40NM    │
 ├─────────────────────────────────────┬─┬──────────────────────────────┤
-│                                     │›│  ⊕ Selected Track           │
-│   Canvas radar                      │ │  ICAO  3C1A3F               │
-│   equirectangular projection        │ │  CALL  DLH123               │
-│   range rings · sector lines        │ │  REF   EDDN/NUE             │
-│   velocity leaders                  │ │  DIST  12.4 NM              │
-│                                     │ │  BRG   247°                 │
-│   iCAS2 transparent labels:         │ │  LAT   49.4100°N            │
-│   V   DLH123  NUE                   │ │  LON   011.1200°E           │
-│   FL340↓-08   FL360                 │ │  PLOC  NO                   │
-│   GS452                             │ │                             │
-│   [■ white square symbols]          │ │  [‹ collapses panel]        │
-├──────────────────┬──────────────────┴─┴──────────┬──────────────────┤
-│ ATC Scanner      │ 118──120──122──124──126──128   │ System Log       │
-│ 119.475 STBY TFR │ [FFT spectrum][waterfall]      │ 12:34:01Z …      │
-│ APP TWR GND DEL  │ STBY mode → click to tune      │                  │
-│ CTR ATIS         │                                │                  │
-└──────────────────┴────────────────────────────────┴──────────────────┘
+│                                     │›│  ⊕ Selected Track            │
+│   Canvas radar                      │ │  ICAO  3C1A3F                │
+│   equirectangular projection        │ │  CALL  DLH123                │
+│   range rings · sector lines        │ │  REF   EDDN/NUE              │
+│   velocity leaders                  │ │  DIST  12.4 NM               │
+│                                     │ │  BRG   247°                  │
+│   iCAS2 transparent labels:         │ │  LAT   49.4100°N             │
+│   V   DLH123  NUE                   │ │  LON   011.1200°E            │
+│   FL340↓-08   FL360                 │ │  PLOC  NO                    │
+│   GS452                             │ │                              │
+│   [■ white square symbols]          │ │  [‹ collapses panel]         │
+├──────────────────┬──────────────────┴─┴──────────┬──────────────────-┤
+│ ATC Scanner      │ 118──120──122──124──126──128  │ System Log        │
+│ 119.475 STBY TFR │ [FFT spectrum][waterfall]     │ 12:34:01Z …       │
+│ APP TWR GND DEL  │ STBY mode → click to tune     │                   │
+│ CTR ATIS         │                               │                   │
+└──────────────────┴───────────────────────────────┴──────────────────-┘
+=======
+┌────────────────────────────────────────────────────────────────────┐
+│ ⬡ PIRX  Radar / SDR Console            ● MOCK   11 TRACKS  40NM    │
+├─────────────────────────────────────┬──────────────────────────────┤
+│                                     │  ⊕ Selected Track            │
+│                                     │  ICAO   3C1A3F               │
+│   Canvas radar                      │  CALL   DLH123               │
+│   equirectangular projection        │  AFL    FL340                │
+│   range rings · sector lines        │  GS     452kt                │
+│   velocity leaders                  │  …                           │
+│                                     │                              │
+│   iCAS2 transparent labels:         │                              │
+│   V   DLH123  NUE                   │                              │
+│   FL340↓-08   FL360                 │                              │
+│   GS452                             │                              │
+│                                     │                              │
+├───────────┬─────────────────────────┴──────────┬───────────────────┤
+│ ATC       │  118 ─── 120 ─── 122 ─── 124 ─ 128 │  System Log       │
+│ Scanner   │  [FFT spectrum line]               │  12:34:01Z …      │
+│           │  [waterfall scrolling down]        │  12:34:00Z Tuned… │
+└───────────┴────────────────────────────────────┴───────────────────┘
 ```
 
 The `›` / `‹` pad on the border toggles the right panel. Aircraft auto-open it on selection and auto-close it on deselect.
