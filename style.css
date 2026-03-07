@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════
-   PIRX Radar / SDR Console — style.css
+   PIRX Radar / SDR Console — style.css  v0.7.0
    Dark theme: #0a0a0a bg · #ffffff text · iCAS2 states · ATC scanner
    ═══════════════════════════════════════════════════════════════ */
 
@@ -29,6 +29,7 @@
   --green-dim:  rgba(0,255,136,0.12);
   --amber:      #ff8800;
   --amber-dim:  rgba(255,136,0,0.14);
+  --ploc:       #ff8c00;   /* PLOC signal-aging indicator — orange */
   --red:        #ff4444;
   --red-dim:    rgba(255,68,68,0.14);
   --yellow:     #ffee00;
@@ -85,6 +86,7 @@ body { display:flex; flex-direction:column; }
   font-size:14px; letter-spacing:.12em; text-transform:uppercase; color:var(--txt-hi);
 }
 .title-dim { color:var(--txt-lo); font-weight:500; }
+.title-ver  { color:var(--txt-dim); font-size:9px; font-weight:400; letter-spacing:.10em; margin-left:4px; vertical-align:middle; }
 
 .badge {
   display:flex; align-items:center; gap:6px;
@@ -114,7 +116,7 @@ body { display:flex; flex-direction:column; }
 .clock-sub  { font-size:9px; color:var(--txt-lo); letter-spacing:.12em; margin-left:3px; }
 
 /* ════════════════════════
-   MIDDLE — radar + panel
+   MIDDLE — radar + collapse toggle + panel
    ════════════════════════ */
 #mid { flex:1; display:flex; overflow:hidden; min-height:0; }
 
@@ -131,17 +133,34 @@ body { display:flex; flex-direction:column; }
 .ov-label { color:var(--txt-lo); font-size:9px; letter-spacing:.1em; margin-right:3px; }
 .ov-val   { color:var(--txt-hi); font-size:10px; }
 
+/* Collapse toggle — sits on the border between radar and right panel */
+#rp-toggle {
+  width:12px; flex-shrink:0;
+  display:flex; align-items:center; justify-content:center;
+  background:var(--bg-panel2);
+  border-left:1px solid var(--border-hi);
+  border-right:1px solid var(--border-hi);
+  cursor:pointer; color:var(--txt-dim); font-size:13px;
+  transition:color var(--trans), background var(--trans);
+  user-select:none; z-index:10;
+}
+#rp-toggle:hover { color:var(--cyan); background:var(--cyan-dim); }
+
+/* Right panel — collapsible via CSS transition */
 #right-panel {
   width:220px; flex-shrink:0;
   background:var(--bg-panel); border-left:1px solid var(--border-hi);
   display:flex; flex-direction:column; overflow:hidden;
+  transition:width 0.18s ease;
 }
+#right-panel.collapsed { width:0; border-left:none; }
+
 .rp-title {
   font-family:var(--font-ui); font-size:9px; font-weight:700;
   letter-spacing:.18em; color:var(--txt-hi); text-transform:uppercase;
   padding:7px 10px 6px; border-bottom:1px solid var(--border);
   display:flex; align-items:center; gap:6px;
-  background:var(--bg-panel2); flex-shrink:0;
+  background:var(--bg-panel2); flex-shrink:0; white-space:nowrap;
 }
 .rp-icon { color:var(--cyan); }
 
@@ -149,6 +168,7 @@ body { display:flex; flex-direction:column; }
   padding:8px 10px;
   display:grid; grid-template-columns:auto 1fr;
   gap:4px 10px; font-size:10px; flex:1; align-content:start;
+  overflow-y:auto;
 }
 .sel-key { color:var(--txt-lo); font-family:var(--font-ui); font-size:9px; letter-spacing:.12em; font-weight:600; }
 .sel-val { color:var(--txt-hi); font-family:var(--font-mono); font-size:10px; font-weight:700; }
@@ -157,8 +177,9 @@ body { display:flex; flex-direction:column; }
 #sel-empty {
   padding:24px 10px; font-size:10px; color:var(--txt-dim);
   text-align:center; font-family:var(--font-ui);
-  letter-spacing:.12em; line-height:2; flex:1;
+  letter-spacing:.12em; line-height:2; flex:1; white-space:nowrap;
 }
+
 
 /* ════════════════════════
    BOTTOM STRIP
@@ -197,12 +218,12 @@ body { display:flex; flex-direction:column; }
   overflow:hidden; flex:1;
 }
 
-/* Row 1 — Freq display + status pills */
+/* Row 1 — Freq display + STBY/TFR + status pills */
 .atc-freq-row {
-  display:flex; align-items:center; gap:10px;
+  display:flex; align-items:center; gap:8px; justify-content:space-between;
 }
 .atc-freq-wrap {
-  display:flex; align-items:baseline; gap:5px; flex:1;
+  display:flex; align-items:baseline; gap:5px;
 }
 #freq-display {
   font-family:'Courier New',monospace;
@@ -231,12 +252,10 @@ body { display:flex; flex-direction:column; }
 .pill-active.on { background:rgba(0,255,136,0.30); }
 .pill-mute   { border-color:var(--amber); background:rgba(255,136,0,0.2); }
 .pill-mute.on   { background:rgba(255,136,0,0.35); }
-.pill-inv    { border-color:var(--cyan);  background:var(--cyan-dim); }
-.pill-inv.on { background:rgba(0,200,200,0.40); color:var(--yellow); border-color:var(--yellow); }
 
-/* Row 2 — Step buttons + INV */
+/* Row 2 — Step buttons */
 .atc-step-row {
-  display:flex; align-items:center; gap:3px;
+  display:flex; align-items:center; gap:3px; justify-content:center;
 }
 .step-unit {
   font-family:var(--font-ui); font-size:9px; font-weight:600;
@@ -278,21 +297,6 @@ body { display:flex; flex-direction:column; }
 .step-btn.flash-neg { background:rgba(255,68,68,0.55) !important; border-color:#ff4444 !important; }
 .step-btn.flash-pos { background:rgba(0,255,136,0.50) !important; border-color:#00ff88 !important; }
 
-/* INV button */
-.inv-btn {
-  font-family:var(--font-ui); font-size:10px; font-weight:700;
-  letter-spacing:.1em; padding:4px 8px;
-  border-radius:2px; border:1px solid var(--border-sel);
-  background:var(--bg-input); color:var(--txt-hi);
-  cursor:pointer; transition:all var(--trans); margin-left:4px;
-}
-.inv-btn:hover { border-color:var(--cyan); color:var(--cyan); background:var(--cyan-dim); }
-.inv-btn.active {
-  border-color:var(--yellow); color:var(--yellow);
-  background:var(--yellow-dim);
-  box-shadow:0 0 8px rgba(255,238,0,0.25);
-}
-
 /* Row 3 — Sliders + Mute */
 .atc-slider-row {
   display:flex; align-items:center; gap:5px;
@@ -317,17 +321,23 @@ body { display:flex; flex-direction:column; }
   width:44px; text-align:right; flex-shrink:0;
 }
 
-/* Mute button */
-.mute-btn {
-  font-size:14px; padding:2px 5px;
-  background:transparent; border:1px solid var(--border-sel);
-  border-radius:2px; cursor:pointer; transition:all var(--trans);
-  line-height:1; margin-left:2px; flex-shrink:0;
+/* MUTE toggle button — selectable, stays lit while muted */
+.mute-toggle-btn {
+  font-family:var(--font-ui); font-size:9px; font-weight:700;
+  letter-spacing:.12em; padding:3px 8px;
+  border-radius:2px; border:1px solid var(--border-sel);
+  background:var(--bg-input); color:var(--txt-lo);
+  cursor:pointer; transition:all var(--trans);
+  flex-shrink:0; margin-left:4px;
 }
-.mute-btn:hover  { border-color:var(--amber); background:var(--amber-dim); }
-.mute-btn.muted  { border-color:var(--amber); background:rgba(255,136,0,0.28); }
+.mute-toggle-btn:hover { border-color:var(--amber); color:var(--txt-hi); background:var(--amber-dim); }
+.mute-toggle-btn.muted {
+  border-color:var(--amber); color:var(--amber);
+  background:rgba(255,136,0,0.28);
+  box-shadow:0 0 7px rgba(255,136,0,0.30);
+}
 
-/* Row 4 — 6 Memory buttons, no label, compact sizing */
+/* Rows 4+5 — Memory buttons */
 .atc-mem-row {
   display:flex; align-items:stretch; gap:2px;
 }
@@ -354,6 +364,38 @@ body { display:flex; flex-direction:column; }
   box-shadow:0 0 9px rgba(0,255,136,0.30) !important;
 }
 
+/* STBY button variant */
+.stby-btn { border-color:rgba(0,170,170,0.40); }
+.stby-btn.active-mem {
+  border-color:var(--cyan); background:rgba(0,170,170,0.20);
+  box-shadow:0 0 7px rgba(0,170,170,0.35);
+}
+.stby-btn.active-mem .mem-name { color:var(--cyan); }
+.stby-btn.active-mem .mem-freq { color:var(--cyan); }
+
+/* TFR button variant */
+.tfr-btn { border-color:rgba(0,255,136,0.30); }
+.tfr-btn.active-mem {
+  border-color:var(--green); background:rgba(0,255,136,0.18);
+  box-shadow:0 0 7px rgba(0,255,136,0.30);
+}
+.tfr-btn.active-mem .mem-name { color:var(--green); }
+.tfr-btn.active-mem .mem-freq { color:var(--green); }
+
+/* User slot buttons 1–4 — same base as mem-btn, empty = dimmed */
+.user-btn .mem-freq { color:var(--txt-dim); }
+.user-btn.has-freq .mem-freq { color:var(--cyan); }
+.user-btn.active-mem {
+  border-color:var(--yellow); background:rgba(255,238,0,0.14);
+  box-shadow:0 0 7px rgba(255,238,0,0.22);
+}
+.user-btn.active-mem .mem-name { color:var(--yellow); }
+.user-btn.erase-flash {
+  border-color:var(--red) !important;
+  background:rgba(255,68,68,0.22) !important;
+  box-shadow:0 0 8px rgba(255,68,68,0.30) !important;
+}
+
 .mem-name {
   font-family:var(--font-ui); font-size:8px; font-weight:700;
   letter-spacing:.10em; color:#ffffff; text-transform:uppercase;
@@ -368,7 +410,8 @@ body { display:flex; flex-direction:column; }
    WATERFALL SECTION — 10 MHz span
    ════════════════════════ */
 #wf-section { flex:1; min-width:0; }
-#wf-body { flex:1; position:relative; overflow:hidden; background:var(--bg); cursor:crosshair; }
+#wf-body { flex:1; position:relative; overflow:hidden; background:var(--bg); cursor:not-allowed; }
+#wf-body.stby-active { cursor:crosshair; }
 #wf-canvas { display:block; width:100%; height:100%; }
 
 /* Fixed 6-tick axis: 118 | 120 | 122 | 124 | 126 | 128 MHz */

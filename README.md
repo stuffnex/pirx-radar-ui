@@ -1,125 +1,136 @@
 # PIRX — Radar / SDR Console
 
-A browser-based ATC radar display and VHF communications scanner. Zero dependencies, zero build step — drop three files on any static host and open `index.html`.
+A browser-based ATC radar display and VHF communications scanner.
+Zero dependencies, zero build step — three static files, any host.
 
-Current version: **0.6.0** · Reference station: **EDDN Nuremberg** · See [CHANGELOG.md](CHANGELOG.md) for full history.
+**Version:** 0.7.0 · **Reference:** EDDN/NUE Nuremberg · See [CHANGELOG.md](CHANGELOG.md)
 
 ---
 
-## Layout Overview
+## Layout
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ⬡ PIRX  Radar / SDR Console            ● MOCK   11 TRACKS   40NM   │
-├─────────────────────────────────────┬────────────────────────────────┤
-│                                     │  ⊕ Selected Track             │
-│                                     │  ICAO   3C1A3F               │
-│   Canvas radar                      │  CALL   DLH123               │
-│   equirectangular projection        │  AFL    FL340                │
-│   range rings · sector lines        │  GS     452kt                │
-│   velocity leaders                  │  …                           │
-│                                     │                              │
-│   iCAS2 transparent labels:         │                              │
-│   V   DLH123  NUE                   │                              │
-│   FL340↓-08   FL360                 │                              │
-│   GS452                             │                              │
-│                                     │                              │
-├───────────┬─────────────────────────┴──────────┬───────────────────┤
-│ ATC       │  118 ─── 120 ─── 122 ─── 124 ─ 128│  System Log       │
-│ Scanner   │  [FFT spectrum line]               │  12:34:01Z …      │
-│           │  [waterfall scrolling down]        │  12:34:00Z Tuned… │
-└───────────┴────────────────────────────────────┴───────────────────┘
+│ ⬡ PIRX  Radar / SDR Console    ● MOCK   11 TRACKS  EDDN/NUE  40NM  │
+├─────────────────────────────────────┬─┬──────────────────────────────┤
+│                                     │›│  ⊕ Selected Track           │
+│   Canvas radar                      │ │  ICAO  3C1A3F               │
+│   equirectangular projection        │ │  CALL  DLH123               │
+│   range rings · sector lines        │ │  REF   EDDN/NUE             │
+│   velocity leaders                  │ │  DIST  12.4 NM              │
+│                                     │ │  BRG   247°                 │
+│   iCAS2 transparent labels:         │ │  LAT   49.4100°N            │
+│   V   DLH123  NUE                   │ │  LON   011.1200°E           │
+│   FL340↓-08   FL360                 │ │  PLOC  NO                   │
+│   GS452                             │ │                             │
+│   [■ white square symbols]          │ │  [‹ collapses panel]        │
+├──────────────────┬──────────────────┴─┴──────────┬──────────────────┤
+│ ATC Scanner      │ 118──120──122──124──126──128   │ System Log       │
+│ 119.475 STBY TFR │ [FFT spectrum][waterfall]      │ 12:34:01Z …      │
+│ APP TWR GND DEL  │ STBY mode → click to tune      │                  │
+│ CTR ATIS         │                                │                  │
+└──────────────────┴────────────────────────────────┴──────────────────┘
 ```
 
-The screen is divided into **75% radar canvas** (top) and **25% bottom strip** (ATC scanner · 10 MHz waterfall · log). A 220 px right panel shows the selected track detail.
+The `›` / `‹` pad on the border toggles the right panel. Aircraft auto-open it on selection and auto-close it on deselect.
 
 ---
 
 ## Features
 
-### Radar Display
+### 1. Aircraft Symbols
 
-- Equirectangular canvas projection centred on a configurable reference coordinate (default EDDN — 49°29'N 011°05'E)
-- Range rings at 5 / 10 / 20 / 40 / 80 / 120 NM; highlighted at 10 / 40 / 80 NM (40 % cyan opacity)
-- Sector lines every 30°, radial vignette
-- Aircraft rendered as heading-oriented chevrons — `#00ff88` green fill, colour-coded stroke
-- 2-minute velocity look-ahead leader lines
-- Mouse-wheel **zoom** 0.5× – 8×, click-drag **pan**, click aircraft to select/deselect
-- Selection ring with pulse glow animation
+- **White squares** — pure `#ffffff` fill, no stroke, no heading rotation
+- Normal: 3×3 px device-pixel square; Selected: 5×5 px
+- Selection glow and velocity leader unchanged
 
-### iCAS2 Transparent Label System
+### 2. iCAS2 Tag System — top line squawk rules
 
-Labels are rendered with **no background boxes** — colour is encoded entirely in the text. Fields are only rendered when they contain actual data; there are no empty placeholders.
+Labels are rendered with no background. Top line (row 1) shows **only** the squawk token:
 
-**Tag colour by squawk:**
-
-| Squawk | Colour | Meaning |
+| Squawk | Display | Colour |
 |---|---|---|
-| 7500 / 7600 / 7700 | `#ff4444` red | Hijack / radio failure / emergency |
-| 7000 | `#00ff88` green | VFR standard |
-| all others | `#66ccff` light blue | IFR / unknown |
+| 7000 | `V` | `#00ff88` green |
+| 7500 / 7600 / 7700 | code e.g. `7500` | `#ff4444` red |
+| all others | code e.g. `2000` | `#66ccff` light blue |
 
-Secondary fields render at ~35 % opacity of the track colour.
+No `WARNINGS` text. No hex ICAO on the tag. Secondary fields (CFL, COP, ASP…) render at 35% opacity of track colour.
 
-**Tagged format** (unselected — compact, data-only):
+**PLOC indicator** (live mode, signal age 30–60 s): orange `PLOC` token appended to row 1.
 
+**Tagged format:**
 ```
 V   DLH123  NUE
 FL340↓-08   FL360
 GS452
 ```
 
-**Detailed format** (selected — all available fields):
-
+**Detailed format (selected):**
 ```
-V   WARNINGS
+V   PLOC
 DLH123  NUE  A320  H  +
 FL340↓-08  +800  FL360  WST
 GS452  480  270  FL380  FRA  FL320
 DIAS  DMACH  DHDG  TRACK
 ```
 
-Field glossary: SQI · CALLSIGN · SI (sector) · ATYP (aircraft type) · WTC (wake turbulence) · AFL+trend+CRC · ARC (assigned climb rate) · CFL · COP · GS · ASP · AHDG · XFL · ADES · PEL.
+### 3. ATC Frequency Scanner — STBY/TFR workflow
 
-### ATC Frequency Scanner
+```
+STBY  TFR
+[119.475 MHz]   TUNED ACTIVE MUTE NORM
+```
 
-- Frequency display: `XXX.XXX MHz`, bold Courier New
-- Step buttons: `−25 | −8.33 | −5  kHz  +5 | +8.33 | +25`
-- **INV toggle** — reverses step-cycle sequence (NORM: 5→8.33→25 / INV: 25→8.33→5)
-- VOL and SQL sliders with dB readout
-- MUTE toggle (🔊 / 🔇)
-- Status pills: `TUNED` · `ACTIVE` · `MUTE` · `NORM`/`INV`
+**Workflow:**
+1. Click **STBY** → button highlights yellow, presets unlock, waterfall click-to-tune activates
+2. Dial frequency using step buttons or click waterfall
+3. Click **TFR** → STBY frequency transfers to active display; TFR highlights yellow; STBY stays lit
+4. Click a **preset** (while in STBY) → memorises current STBY frequency into that slot
 
-**6 memory channels — single compact row:**
+**Preset protection:**
+- Presets are **read-only** unless STBY is active
+- **2-second long-press** on any preset → resets it to the factory EDDN default
+- Waterfall click-to-tune is **disabled** unless STBY is active (cursor shows `not-allowed`)
 
-| Channel | Default | Use |
+**Factory EDDN/NUE defaults:**
+
+| Preset | MHz | Service |
 |---|---|---|
-| APP | 119.475 MHz | EDDN Approach |
-| TWR | 118.305 MHz | EDDN Tower |
-| GND | 121.760 MHz | EDDN Ground |
-| DEL | 121.760 MHz | EDDN Delivery |
-| CTR | 129.525 MHz | Langen Radar |
-| ATIS | 123.080 MHz | EDDN ATIS |
+| APP | 119.475 | EDDN Approach |
+| TWR | 118.305 | EDDN Tower |
+| GND | 121.760 | EDDN Ground |
+| DEL | 121.760 | EDDN Delivery |
+| CTR | 129.525 | Langen Radar |
+| ATIS | 123.080 | EDDN ATIS |
 
-Single click → tune. Long-press (600 ms) or right-click → store current frequency into that slot.
+### 4. EDDN/NUE Coordinates in Selected Track Panel
 
-### FFT / Waterfall — 10 MHz fixed band
+The selected track panel now shows position relative to the EDDN/NUE reference point:
 
-- Fixed display band: **118.000 – 128.000 MHz** (full VHF ATC approach band)
-- ~25 kHz/pixel resolution — resolves individual 8.33 kHz ATC channels
-- ≤40 fps using `requestAnimationFrame` with 25 ms throttle
-- Top 38 % of panel: FFT spectrum line with dB grid and 2 MHz vertical markers
-- Thermal colour gradient: black → deep teal → cyan → white
-- Mock signal peaks placed at all EDDN ATC frequencies (APP, TWR, GND/DEL, CTR, ATIS, 121.5 guard)
-- Fixed axis labels: `118 | 120 | 122 | 124 | 126 | 128 MHz`
-- **Click to tune** — click anywhere on the waterfall to instantly retune (snaps to nearest 8.33 kHz channel)
-- **Hover** shows a floating `XXX.XXX MHz` tooltip
-- White solid tune-marker line repositions instantly on every frequency change
+| Field | Description |
+|---|---|
+| REF | Reference airport: `EDDN/NUE` |
+| DIST | Great-circle distance in NM |
+| BRG | Magnetic bearing from EDDN/NUE |
+| LAT / LON | Absolute coordinates with N/S/E/W suffix |
 
-### System Log
+### 5. Live Mode Signal Lifetime
 
-- Prepend-on-top, max 60 entries, UTC timestamps `HH:MM:SSZ`
-- Colour codes: white (info) · amber (warn) · green (ok) · red (error)
+Applies only when connected to a live backend (not mock):
+
+| Age | Display |
+|---|---|
+| 0 – 30 s | Normal squawk colour |
+| 30 – 60 s | Orange `PLOC` appended to row 1; squawk keeps its colour |
+| > 60 s | Track removed from display |
+
+### 6. Collapsible Selected Track Panel
+
+- `›` / `‹` toggle pad sits on the vertical border between radar and right panel
+- **Auto-opens** when an aircraft is selected
+- **Auto-collapses** when aircraft is deselected
+- CSS `width` transition (180 ms) — smooth, no layout jump
+- Canvas resizes automatically after collapse/expand
 
 ---
 
@@ -127,43 +138,57 @@ Single click → tune. Long-press (600 ms) or right-click → store current freq
 
 ```
 pirx-radar-ui/
-├── index.html      Layout: top bar · radar · right panel · bottom strip
-├── style.css       Dark theme · ATC scanner · waterfall tooltip · no icas2 bg classes
-├── app.js          All logic: radar · iCAS2 labels · ATC scanner · waterfall · mock/WebSocket
+├── index.html      Layout + HTML structure
+├── style.css       Dark theme, ATC scanner, collapsible panel, STBY states
+├── app.js          All logic — radar, iCAS2, ATC scanner, waterfall, WS/mock
 ├── README.md       This file
 └── CHANGELOG.md    Version history
 ```
-
-No `node_modules`, no bundler, no framework.
 
 ---
 
 ## Deployment
 
-### Static hosting (Cloudflare Pages / Netlify / GitHub Pages)
+### Static file serving (any host)
 
-Commit the three source files to a repository, point your host at the root directory. No build command required.
-
-### Local development
+No build step. Serve the three files from any static host.
 
 ```bash
+# Local development
 python3 -m http.server 8080
 # or
 npx serve .
-# open http://localhost:8080
 ```
 
-### Connecting a real backend
+### Cloudflare Tunnel (Pi → public HTTPS)
 
-Edit the constant at the top of `app.js`:
+See [CLOUDFLARE-TUNNEL.md](CLOUDFLARE-TUNNEL.md) for full setup guide.
+
+Short version:
+1. Install `cloudflared` on the Pi
+2. `cloudflared tunnel login`
+3. `cloudflared tunnel create pirx`
+4. Configure public hostname → `http://localhost:8080`
+5. `cloudflared tunnel run pirx`
+
+The frontend auto-detects it is on a production host and switches to `wss://` with no port.
+
+### Backend endpoint configuration
+
+Edit the two constants at the top of `app.js`:
 
 ```js
-const BACKEND_WS_URL = 'wss://your-backend-host/ws';
+const PRODUCTION_HOSTS = [
+  'pirx.dustyhut.org',   // ← your Cloudflare Tunnel / custom domain
+];
+const LOCAL_PORT = 8080;  // ← backend port for LAN / localhost
 ```
 
-On load the app opens a WebSocket. If it fails or times out (5 s), it falls back automatically to mock data.
+All other URL logic is automatic. See the full comment block in `app.js` for multi-domain and reverse-proxy setups.
 
-**Expected WebSocket push format (`type: "tracks"`):**
+---
+
+## Backend WebSocket format
 
 ```json
 {
@@ -183,42 +208,11 @@ On load the app opens a WebSocket. If it fails or times out (5 s), it falls back
 }
 ```
 
-All fields except `icao`, `lat`, `lon` are optional — the renderer degrades gracefully.
-
----
-
-## Configuration
-
-All tuneable constants are at the top of `app.js`:
-
-```js
-// Backend WebSocket
-const BACKEND_WS_URL = 'wss://…';
-
-// Radar centre (EDDN default)
-const REF_LAT = 49.49;
-const REF_LON = 11.08;
-
-// Waterfall band — fixed 10 MHz span
-const WF_MIN_KHZ = 118000;   // 118.000 MHz
-const WF_MAX_KHZ = 128000;   // 128.000 MHz
-
-// Memory channel presets (kHz)
-const memory = {
-  APP:  119475,
-  TWR:  118305,
-  GND:  121760,
-  DEL:  121760,
-  CTR:  129525,
-  ATIS: 123080,
-};
-```
+All fields except `icao`, `lat`, `lon` optional. Backend also optionally exposes `GET /health` and `GET /status`.
 
 ---
 
 ## Browser Compatibility
-
-Requires Canvas 2D API and WebSocket — available in all evergreen browsers since 2016.
 
 | Browser | Minimum |
 |---|---|
@@ -226,7 +220,8 @@ Requires Canvas 2D API and WebSocket — available in all evergreen browsers sin
 | Firefox | 75+ |
 | Safari | 14+ |
 
-High-DPI / Retina rendering is automatic via `window.devicePixelRatio`.
+High-DPI rendering automatic via `window.devicePixelRatio`.
+Tested on Raspberry Pi 4 Chromium (1024×600).
 
 ---
 
@@ -236,13 +231,14 @@ High-DPI / Retina rendering is automatic via `window.devicePixelRatio`.
 |---|---|---|
 | M1 | ✅ | Static frontend, mock data, iCAS2 labels, ATC scanner |
 | M2 | ✅ | 10 MHz waterfall, click-to-tune, EDDN frequencies, clean tags |
-| M3 | — | Real FFT — RTL-SDR or WebSDR WebSocket feed |
-| M4 | — | Sector geometry overlay (TMA / CTR / airways as GeoJSON) |
-| M5 | — | Live ADSB adapter (OpenSky / ADSB-Exchange) |
-| M6 | — | Conflict detection — STCA with urgency label promotion |
+| M3 | ✅ | STBY/TFR workflow, collapsible panel, white squares, signal lifetime |
+| M4 | — | Real FFT — RTL-SDR or WebSDR WebSocket feed |
+| M5 | — | Sector geometry overlay (TMA / CTR / airways GeoJSON) |
+| M6 | — | Live ADSB adapter (OpenSky / ADSB-Exchange) |
+| M7 | — | Conflict detection — STCA with urgency label promotion |
 
 ---
 
 ## Licence
 
-MIT — see [LICENCE](LICENCE) for details.
+MIT — see [LICENCE](LICENCE).

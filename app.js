@@ -1,56 +1,105 @@
 'use strict';
 // ═══════════════════════════════════════════════════════════════════════
-// PIRX Radar / SDR Console — app.js  v0.6.0
+// PIRX Radar / SDR Console — app.js  v0.7.2
 //
-//  1. Clean iCAS2 tags — only populated fields rendered
-//  2. Simplified squawk colours (no OAT class)
-//  3. EDDN (Nuremberg) default frequencies
-//  4. 10 MHz span waterfall (118–128 MHz), capped 40 fps, EDDN mock peaks
-//  5. Click-to-tune waterfall + crosshair hover tooltip
-//  6. 6-button memory row: APP / TWR / GND / DEL / CTR / ATIS
+//  1. Aircraft symbols: white squares, 25% of previous diamond size
+//  2. Top tag line: squawk display with V/code rules, no WARNINGS text
+//  3. Frequency panel: STBY/TFR workflow, protected presets, 2s long-press reset
+//  4. EDDN/NUE coordinates displayed in selected track panel
+//  5. Live mode signal lifetime: 60s total, PLOC shown 30–60s (orange)
+//  6. Collapsible selected track panel with auto-open/close on select
 // ═══════════════════════════════════════════════════════════════════════
 
-// ── Dynamic endpoints — resolves to whichever host served the page.
-// Works transparently on localhost, LAN (Pi IP), and production domain.
-const _HOST     = window.location.hostname;
-const _PORT     = 8080;
-const _WS_PROTO = window.location.protocol === 'https:' ? 'wss' : 'ws';
+// ════════════════════════════════════════════════════════════════════════
+// ENDPOINT CONFIGURATION
+// ════════════════════════════════════════════════════════════════════════
+//
+// The app detects at runtime whether it is served from a public production
+// host or from a local LAN / localhost address, and picks the right
+// WebSocket and REST URLs automatically.  No hardcoded IPs needed.
+//
+// ── PRODUCTION HOSTS (edit this list) ───────────────────────────────
+//
+//   Add every public hostname that serves this frontend.
+//   Typical cases:
+//
+//   Cloudflare Tunnel + custom domain
+//     → 'yourradar.yourdomain.com'
+//       Tunnel terminates TLS; the app uses wss:// with no port number.
+//       Setup: Cloudflare Zero Trust → Tunnels → add a public hostname
+//              pointing to http://localhost:8080 on the Pi.
+//
+//   Cloudflare Pages (static frontend only, backend elsewhere)
+//     → 'yourproject.pages.dev'  or  'yourradar.yourdomain.com'
+//       Same rule: wss://, no port.
+//
+//   Any VPS / NGINX / Caddy reverse proxy over HTTPS
+//     → 'radar.mydomain.org'
+//       Proxy terminates TLS and forwards to the backend; wss://, no port.
+//
+//   Multiple domains simultaneously
+//     → ['radar.site-a.com', 'backup.site-b.net']
+//
+//   Current project — replace with your own domain(s):
+//
+const PRODUCTION_HOSTS = [
+  'pirx.dustyhut.org',   // ← Cloudflare Tunnel hostname — change to yours
+];
+//
+// ── LOCAL / LAN (no changes needed) ─────────────────────────────────
+//
+//   Any hostname NOT in PRODUCTION_HOSTS is treated as local:
+//     localhost, 127.0.0.1, 192.168.x.x, 10.x.x.x, hostname.local …
+//   The app uses ws:// and appends :8080 automatically.
+//   Backend port is 8080 — change the literal below if yours differs:
+//
+const LOCAL_PORT = 8080;
+//
+// ════════════════════════════════════════════════════════════════════════
 
-const WS_URL   = `${_WS_PROTO}://${_HOST}:${_PORT}/ws/traffic`;
-const API_BASE = `${window.location.protocol}//${_HOST}:${_PORT}`;
-const HEALTH   = `${API_BASE}/health`;
-const STATUS   = `${API_BASE}/status`;
+const _HOST    = window.location.hostname;
+const _IS_PROD = PRODUCTION_HOSTS.includes(_HOST);
+
+const WS_URL   = _IS_PROD
+  ? `wss://${_HOST}/ws/traffic`               // production: wss, no port
+  : `ws://${_HOST}:${LOCAL_PORT}/ws/traffic`; // local LAN:  ws,  port 8080
+
+const API_BASE = _IS_PROD
+  ? `https://${_HOST}`
+  : `http://${_HOST}:${LOCAL_PORT}`;
+
+const HEALTH = `${API_BASE}/health`;
+const STATUS = `${API_BASE}/status`;
 
 // ── Reference: EDDN Nuremberg ─────────────────────────────────────────
-const REF_LAT = 49.49;
-const REF_LON = 11.08;
-const NM_TO_M = 1852;
+const REF_LAT  = 49.498611;  // EDDN ARP 49°29'55"N
+const REF_LON  = 11.078056;  // EDDN ARP 011°04'41"E
+const REF_ICAO = 'EDDN';
+const REF_IATA = 'NUE';
+const NM_TO_M  = 1852;
 
-// ─────────────────────────────────────────────────────────────────────
-// WATERFALL BAND CONSTANTS  (improvement 4)
-// ─────────────────────────────────────────────────────────────────────
-const WF_MIN_KHZ = 118000;   // 118.000 MHz
-const WF_MAX_KHZ = 128000;   // 128.000 MHz
-const WF_SPAN_KHZ = WF_MAX_KHZ - WF_MIN_KHZ;   // 10 000 kHz
+// ── Waterfall band ────────────────────────────────────────────────────
+const WF_MIN_KHZ  = 118000;
+const WF_MAX_KHZ  = 128000;
+const WF_SPAN_KHZ = WF_MAX_KHZ - WF_MIN_KHZ;
 
 // EDDN ATC frequencies for mock peaks (kHz)
 const EDDN_PEAKS = [
-  { f: 119475, amp: 0.80 },   // APP
-  { f: 118305, amp: 0.70 },   // TWR
-  { f: 121760, amp: 0.55 },   // GND / DEL
-  { f: 129525, amp: 0.65 },   // CTR  — above 128 → clamped to edge
-  { f: 123080, amp: 0.45 },   // ATIS
-  { f: 121500, amp: 0.35 },   // EMRG guard
+  { f: 119475, amp: 0.80 },
+  { f: 118305, amp: 0.70 },
+  { f: 121760, amp: 0.55 },
+  { f: 129525, amp: 0.65 },
+  { f: 123080, amp: 0.45 },
+  { f: 121500, amp: 0.35 },
 ];
+
+// ── Signal lifetime (live mode only) ─────────────────────────────────
+const SIGNAL_PLOC_AGE = 30;   // seconds before PLOC appears
+const SIGNAL_MAX_AGE  = 60;   // seconds before track removed
 
 // ═══════════════════════════════════════════════════════════════════════
 // iCAS2 LOOKUP TABLES
 // ═══════════════════════════════════════════════════════════════════════
-
-const SQI_MAP = {
-  '7000':'V', '2000':'I', '1200':'L',
-  '7500':'S', '7600':'R', '7700':'E',
-};
 
 const WTC_MAP = {
   'DLH':'H','BAW':'H','UAE':'H','QFA':'H','SIA':'H',
@@ -71,13 +120,19 @@ const MOCK_SI  = ['NUE','MUC','FRA','STR','VIE','ZRH','HAM','BER','DUS','CGN'];
 const MOCK_COP = ['NTH','STH','EST','WST','TOP','BOT'];
 
 // ═══════════════════════════════════════════════════════════════════════
-// 2. TAG COLOUR — simplified, three states only
+// 2. TAG COLOUR + SQUAWK DISPLAY RULES
 // ═══════════════════════════════════════════════════════════════════════
 
+/**
+ * Returns full-brightness colour for a label.
+ *   RED        #ff4444  — emergency 7500 / 7600 / 7700
+ *   GREEN      #00ff88  — VFR 7000
+ *   LIGHT BLUE #66ccff  — all others
+ */
 function getTagColor(squawk) {
-  if (['7500','7600','7700'].includes(squawk)) return '#ff4444';  // red — emergency
-  if (squawk === '7000')                       return '#00ff88';  // green — VFR
-  return '#66ccff';                                               // light blue — IFR/other
+  if (['7500','7600','7700'].includes(squawk)) return '#ff4444';
+  if (squawk === '7000')                       return '#00ff88';
+  return '#66ccff';
 }
 
 function getDimColor(squawk) {
@@ -89,11 +144,24 @@ function getDimColor(squawk) {
   return map[getTagColor(squawk)] || 'rgba(102,204,255,0.35)';
 }
 
+/**
+ * Row 1 squawk token — the only content on the top tag line.
+ *   7000           → text: 'V',       colour: green
+ *   7500/7600/7700 → text: squawk,    colour: red
+ *   all others     → text: squawk,    colour: blue
+ * NO 'WARNINGS' text. NO hex ICAO.
+ */
+function getSquawkToken(squawk) {
+  const sq = squawk || '';
+  if (sq === '7000')                           return { text: 'V',  color: '#00ff88' };
+  if (['7500','7600','7700'].includes(sq))     return { text: sq,   color: '#ff4444' };
+  return                                              { text: sq,   color: '#66ccff' };
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // FIELD HELPERS
 // ═══════════════════════════════════════════════════════════════════════
 
-function getSQI(sq)  { return SQI_MAP[sq] || ''; }
 function getWTC(cs)  { return cs ? (WTC_MAP[cs.substring(0,3).toUpperCase()] || '') : ''; }
 function getATYP(cs) { return cs ? (ATYP_MAP[cs.substring(0,3).toUpperCase()] || '') : ''; }
 
@@ -143,65 +211,56 @@ function assignState(icao) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// 1. CLEAN FIELD BUILDERS — only push fields with actual values
+// 2 + 5. FIELD BUILDERS — clean, squawk-only row 1, PLOC on aging
 // ═══════════════════════════════════════════════════════════════════════
 
 /**
- * TAGGED (unselected): minimal rows, no empty slots.
- *
- * Row 1:  SQI [WARNINGS]
- * Row 2:  CALLSIGN [SI]
- * Row 3:  AFL[↓][CRC] [CFL]          — CFL only if cleared ≠ actual
- * Row 4:  GS                          — only if GS has data
+ * TAGGED (unselected):
+ *   Row 1:  squawk token [PLOC if aging]
+ *   Row 2:  CALLSIGN [SI]
+ *   Row 3:  AFL[↓][CRC] [CFL]
+ *   Row 4:  GS (if present)
  */
 function getTaggedLines(track) {
   const sq    = track.squawk || '';
-  const sqi   = getSQI(sq);
   const cs    = (track.callsign || track.icao).trim();
   const afl   = formatFL(track.altitude);
   const crc   = formatCRC(track._vr);
   const trend = trendChar(track._vr);
   const gs    = track.groundspeed ? Math.round(track.groundspeed).toString() : '';
-  const isUrg = ['7500','7600','7700'].includes(sq);
   const ex    = getMockExtras(track);
+  const sqTok = getSquawkToken(sq);
 
-  // Row 1 — always shown; WARNINGS only on emergency squawk
-  const r1 = [];
-  if (sqi)   r1.push({ text: sqi,        dim: false });
-  if (isUrg) r1.push({ text: 'WARNINGS', dim: false, warn: true });
+  // Row 1 — squawk token + optional PLOC
+  const r1 = [{ text: sqTok.text, color: sqTok.color }];
+  if (track._ploc) r1.push({ text: 'PLOC', color: '#ff8c00' });
 
-  // Row 2 — callsign (always) + SI (only if present)
-  const r2 = [];
-  r2.push({ text: cs, dim: false });
-  if (ex.si) r2.push({ text: ex.si, dim: false });
+  // Row 2 — callsign + SI
+  const r2 = [{ text: cs }];
+  if (ex.si) r2.push({ text: ex.si });
 
-  // Row 3 — AFL+trend+CRC combined as one token, then CFL if different
+  // Row 3 — AFL block + CFL
   const r3 = [];
-  if (afl) {
-    const aflToken = afl + trend + crc;   // e.g. "FL340↓-08" or "FL340"
-    r3.push({ text: aflToken, dim: false });
-  }
+  if (afl) r3.push({ text: afl + trend + crc });
   if (ex.cfl) r3.push({ text: ex.cfl, dim: true });
 
-  // Row 4 — GS (only if present)
+  // Row 4 — GS
   const r4 = [];
-  if (gs) r4.push({ text: 'GS' + gs, dim: false });
+  if (gs) r4.push({ text: 'GS' + gs });
 
   return [r1, r2, r3, r4].filter(r => r.length > 0);
 }
 
 /**
- * DETAILED (selected): expands to show all available fields.
- *
- * Row 1:  SQI [WARNINGS]
- * Row 2:  CALLSIGN [SI] [ATYP] [WTC] [+]
- * Row 3:  AFL[↓][CRC] [ARC] [CFL] [COP]
- * Row 4:  GS [ASP] [AHDG] [XFL] [ADES] [PEL]
- * Row 5:  DIAS DMACH DHDG TRACK       (always dim)
+ * DETAILED (selected):
+ *   Row 1:  squawk token [PLOC if aging]
+ *   Row 2:  CALLSIGN [SI] [ATYP] [WTC] [+]
+ *   Row 3:  AFL[↓][CRC] [ARC] [CFL] [COP]
+ *   Row 4:  GS [ASP] [AHDG] [XFL] [ADES] [PEL]
+ *   Row 5:  DIAS DMACH DHDG TRACK (dim)
  */
 function getDetailedLines(track) {
   const sq    = track.squawk || '';
-  const sqi   = getSQI(sq);
   const cs    = (track.callsign || track.icao).trim();
   const wtc   = getWTC(track.callsign);
   const atyp  = getATYP(track.callsign);
@@ -209,42 +268,35 @@ function getDetailedLines(track) {
   const crc   = formatCRC(track._vr);
   const trend = trendChar(track._vr);
   const gs    = track.groundspeed ? Math.round(track.groundspeed).toString() : '';
-  const isUrg = ['7500','7600','7700'].includes(sq);
   const ex    = getMockExtras(track);
+  const sqTok = getSquawkToken(sq);
 
-  const r1 = [];
-  if (sqi)   r1.push({ text: sqi,        dim: false });
-  if (isUrg) r1.push({ text: 'WARNINGS', dim: false, warn: true });
+  const r1 = [{ text: sqTok.text, color: sqTok.color }];
+  if (track._ploc) r1.push({ text: 'PLOC', color: '#ff8c00' });
 
-  const r2 = [];
-  r2.push({ text: cs, dim: false });
-  if (ex.si) r2.push({ text: ex.si,  dim: false });
-  if (atyp)  r2.push({ text: atyp,   dim: false });
-  if (wtc)   r2.push({ text: wtc,    dim: false });
-  r2.push({ text: '+', dim: false });   // transfer indicator
+  const r2 = [{ text: cs }];
+  if (ex.si) r2.push({ text: ex.si });
+  if (atyp)  r2.push({ text: atyp });
+  if (wtc)   r2.push({ text: wtc });
+  r2.push({ text: '+' });
 
   const r3 = [];
-  if (afl) {
-    const aflToken = afl + trend + crc;
-    r3.push({ text: aflToken, dim: false });
-  }
-  if (ex.arc) r3.push({ text: ex.arc, dim: false });
-  if (ex.cfl) r3.push({ text: ex.cfl, dim: false });
-  if (ex.cop) r3.push({ text: ex.cop, dim: true  });
+  if (afl) r3.push({ text: afl + trend + crc });
+  if (ex.arc) r3.push({ text: ex.arc });
+  if (ex.cfl) r3.push({ text: ex.cfl });
+  if (ex.cop) r3.push({ text: ex.cop, dim: true });
 
   const r4 = [];
-  if (gs)        r4.push({ text: 'GS'+gs,    dim: false });
-  if (ex.asp)    r4.push({ text: ex.asp,      dim: true  });
-  if (ex.ahdg)   r4.push({ text: ex.ahdg,    dim: true  });
-  if (ex.xfl)    r4.push({ text: ex.xfl,     dim: true  });
-  if (ex.ades)   r4.push({ text: ex.ades,    dim: true  });
-  if (ex.pel)    r4.push({ text: ex.pel,     dim: true  });
+  if (gs)        r4.push({ text: 'GS'+gs });
+  if (ex.asp)    r4.push({ text: ex.asp,   dim: true });
+  if (ex.ahdg)   r4.push({ text: ex.ahdg,  dim: true });
+  if (ex.xfl)    r4.push({ text: ex.xfl,   dim: true });
+  if (ex.ades)   r4.push({ text: ex.ades,  dim: true });
+  if (ex.pel)    r4.push({ text: ex.pel,   dim: true });
 
   const r5 = [
-    { text:'DIAS',  dim:true },
-    { text:'DMACH', dim:true },
-    { text:'DHDG',  dim:true },
-    { text:'TRACK', dim:true },
+    { text:'DIAS', dim:true }, { text:'DMACH', dim:true },
+    { text:'DHDG', dim:true }, { text:'TRACK', dim:true },
   ];
 
   return [r1, r2, r3, r4, r5].filter(r => r.length > 0);
@@ -252,44 +304,49 @@ function getDetailedLines(track) {
 
 // ═══════════════════════════════════════════════════════════════════════
 // TAG DRAWING — transparent, text-colour only
+// Tokens now support { text, color?, dim? }:
+//   color  — explicit hex override (row 1 squawk, PLOC)
+//   dim    — 35% opacity of track colour
+//   default — full track colour
 // ═══════════════════════════════════════════════════════════════════════
 
 function drawTag(ctx, track, x, y, isSelected) {
-  const dpr      = window.devicePixelRatio || 1;
-  const fPx      = isSelected ? 12 : 11;
-  const fs       = Math.round(fPx * dpr);
-  const lineH    = Math.round((fPx + 3) * dpr);
-  const colGap   = Math.round(5 * dpr);
-  const full     = getTagColor(track.squawk);
-  const dim      = getDimColor(track.squawk);
-  const fontN    = `${fs}px 'Courier New',monospace`;
-  const fontB    = `bold ${fs}px 'Courier New',monospace`;
+  const dpr    = window.devicePixelRatio || 1;
+  const fPx    = isSelected ? 12 : 11;
+  const fs     = Math.round(fPx * dpr);
+  const lineH  = Math.round((fPx + 3) * dpr);
+  const colGap = Math.round(5 * dpr);
+  const full   = getTagColor(track.squawk);
+  const dim    = getDimColor(track.squawk);
+  const fontN  = `${fs}px 'Courier New',monospace`;
+  const fontB  = `bold ${fs}px 'Courier New',monospace`;
 
   ctx.save();
-  ctx.font = fontN;
-  ctx.textBaseline = 'top';
-  ctx.textAlign    = 'left';
+  ctx.font = fontN; ctx.textBaseline = 'top'; ctx.textAlign = 'left';
 
   const lines = isSelected ? getDetailedLines(track) : getTaggedLines(track);
-  const TX    = x + Math.round(12 * dpr);
-  const TY    = y - Math.round(lineH * lines.length * 0.5);
+  const off = tagOffsets.get(track.icao) || { dx: Math.round(12 * dpr), dy: 0 };
+  const TX  = x + off.dx;
+  const TY  = y + off.dy - Math.round(lineH * lines.length * 0.5);
 
-  // Connector
-  ctx.strokeStyle = full; ctx.globalAlpha = 0.30;
-  ctx.lineWidth   = dpr * 0.8;
-  ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(TX, TY + lineH); ctx.stroke();
+  // Connector line — always drawn from symbol to tag anchor
+  ctx.strokeStyle = full; ctx.globalAlpha = 0.42;
+  ctx.lineWidth = dpr * 0.8;
+  ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(TX, TY + lineH * 0.5); ctx.stroke();
   ctx.globalAlpha = 1;
 
   lines.forEach((tokens, ri) => {
     let cx = TX;
     const ry = TY + ri * lineH;
     tokens.forEach(tok => {
-      if (tok.warn) {
-        ctx.fillStyle = '#ff4444'; ctx.font = fontB;
+      if (tok.color) {
+        // Explicit colour override (squawk token / PLOC)
+        ctx.fillStyle = tok.color;
+        ctx.font = ri === 0 ? fontB : fontN;   // row 1 always bold
       } else if (tok.dim) {
-        ctx.fillStyle = dim;       ctx.font = fontN;
+        ctx.fillStyle = dim; ctx.font = fontN;
       } else {
-        ctx.fillStyle = full;      ctx.font = isSelected ? fontB : fontN;
+        ctx.fillStyle = full; ctx.font = isSelected ? fontB : fontN;
       }
       ctx.fillText(tok.text, cx, ry);
       cx += ctx.measureText(tok.text).width + colGap;
@@ -309,30 +366,37 @@ function drawICAS2Untagged(ctx, t, x, y) { drawTag(ctx, t, x, y, false); }
 function drawICAS2Tagged(ctx, t, x, y)   { drawTag(ctx, t, x, y, true);  }
 
 // ═══════════════════════════════════════════════════════════════════════
-// 3 + 6. ATC SCANNER STATE — EDDN defaults, 6 memory channels
+// ATC SCANNER STATE — reverted to v0.6 base + new STBY/TFR/destination flow
 // ═══════════════════════════════════════════════════════════════════════
 
-let freq = 119475;   // kHz — EDDN APP
+let freq = 119475;   // kHz — active frequency shown in main display
 
-const STEP_NORMAL = [5, 8.33, 25];
-const STEP_INVERT = [25, 8.33, 5];
-let stepSequence = 'NORMAL';
-let stepPosIndex = 0;
-let stepNegIndex = 0;
-
-// 3. EDDN (Nuremberg) frequencies
-const memory = {
-  APP:  119475,   // 119.475 MHz  EDDN Approach
-  TWR:  118305,   // 118.305 MHz  EDDN Tower
-  GND:  121760,   // 121.760 MHz  EDDN Ground
-  DEL:  121760,   // 121.760 MHz  EDDN Delivery (same as GND)
-  CTR:  129525,   // 129.525 MHz  Langen Radar
-  ATIS: 123080,   // 123.080 MHz  EDDN ATIS
+// EDDN factory defaults
+const DEFAULT_MEMORY = {
+  APP:  119475,
+  TWR:  118305,
+  GND:  121760,
+  DEL:  121760,
+  CTR:  129525,
+  ATIS: 123080,
 };
+const memory   = { ...DEFAULT_MEMORY };
 const MEM_KEYS = ['APP','TWR','GND','DEL','CTR','ATIS'];
 
-let activeMemKey = 'APP';
-let isMuted      = false;
+// User slots 1–4: null = empty
+const userSlots = { U1: null, U2: null, U3: null, U4: null };
+const USER_KEYS = ['U1','U2','U3','U4'];
+
+// STBY/TFR workflow state
+// Phase 0: idle — normal operation
+// Phase 1: STBY active — step buttons/waterfall dial stbyFreq
+// Phase 2: TFR active — stbyFreq transferred to freq, waiting for destination press
+let scanPhase = 0;   // 0 | 1 | 2
+let stbyFreq  = 119475;
+let pendingFreq = null;  // freq ready to be stored, set when TFR pressed
+
+let activeMemKey = 'APP';  // currently highlighted preset/slot
+let isMuted = false;
 
 // ═══════════════════════════════════════════════════════════════════════
 // GENERAL APP STATE
@@ -343,12 +407,18 @@ let viewScale = 1;
 let panX = 0, panY = 0;
 let rangeNM   = 40;
 let pulsePhase = 0;
-let isDragging = false;
+let isDragging      = false;
+let isDraggingTag   = false;
 let dragSX=0, dragSY=0, panSX=0, panSY=0;
+let dragTagIcao = null, dragTagDX = 0, dragTagDY = 0;
+// Per-track tag offsets (canvas pixels from symbol position)
+const tagOffsets = new Map();
 let wfHistory = [];
 let wfPhase   = 0;
 let lastTs    = 0;
-let wfLastTs  = 0;   // separate throttle for waterfall
+let wfLastTs  = 0;
+let isMockMode = false;
+let rpCollapsed = false;
 
 // ═══════════════════════════════════════════════════════════════════════
 // DOM REFS
@@ -367,66 +437,163 @@ const cursorLlEl   = document.getElementById('cursor-ll');
 const logBody      = document.getElementById('log-body');
 const wfTuneLine   = document.getElementById('wf-tune-line');
 const wfTooltip    = document.getElementById('wf-tooltip');
+const wfBody       = document.getElementById('wf-body');
+const rightPanel   = document.getElementById('right-panel');
+const rpToggle     = document.getElementById('rp-toggle');
+
+// ═══════════════════════════════════════════════════════════════════════
+// COLLAPSIBLE RIGHT PANEL
+// ═══════════════════════════════════════════════════════════════════════
+
+function setRightPanel(open) {
+  rpCollapsed = !open;
+  rightPanel.classList.toggle('collapsed', rpCollapsed);
+  rpToggle.textContent = rpCollapsed ? '\u2039' : '\u203a';
+  setTimeout(resize, 200);
+}
+rpToggle.addEventListener('click', () => setRightPanel(rpCollapsed));
 
 // ═══════════════════════════════════════════════════════════════════════
 // ATC SCANNER ENGINE
 // ═══════════════════════════════════════════════════════════════════════
 
+/** setFreq: dials stbyFreq when in phase 1, active freq otherwise */
 function setFreq(khz) {
-  // Clamp to VHF aeronautical band 118–137 MHz
-  freq = Math.max(118000, Math.min(137000, khz));
-  freqEl.textContent = (freq / 1000).toFixed(3);
+  const clamped = Math.max(118000, Math.min(137000, khz));
+  if (scanPhase === 1) {
+    stbyFreq = clamped;
+    freqEl.textContent = (stbyFreq / 1000).toFixed(3);
+    document.getElementById('stby-freq-display').textContent = (stbyFreq / 1000).toFixed(3);
+  } else {
+    freq = clamped;
+    freqEl.textContent = (freq / 1000).toFixed(3);
+  }
   updateTuneMarker();
   updateStatusPills();
-  // Don't clear wfHistory — 10 MHz span keeps showing everything
 }
 
-/** Position the white tune-marker line on the waterfall */
 function updateTuneMarker() {
-  const pct = ((freq - WF_MIN_KHZ) / WF_SPAN_KHZ) * 100;
-  const clamped = Math.max(0, Math.min(100, pct));
-  wfTuneLine.style.left  = clamped + '%';
+  const f = scanPhase >= 1 ? stbyFreq : freq;
+  const pct = Math.max(0, Math.min(100, ((f - WF_MIN_KHZ) / WF_SPAN_KHZ) * 100));
+  wfTuneLine.style.left = pct + '%';
   wfTuneLine.style.transform = 'translateX(-50%)';
 }
 
 function updateStatusPills() {
   document.getElementById('pill-tuned').classList.add('on');
   document.getElementById('pill-active').classList.toggle('on', !isMuted);
+  document.getElementById('pill-mute').classList.toggle('on', isMuted);
 }
 
-function directStep(khz) {
-  setFreq(freq + khz);
-  flashStepBtn(Math.abs(khz), khz > 0 ? '+' : '-');
-  log((khz > 0 ? 'Step +' : 'Step ') + Math.abs(khz) + ' kHz → ' + (freq/1000).toFixed(3) + ' MHz', 'info');
+function updateScanPhaseUI() {
+  const stbyBtn = document.getElementById('btn-stby');
+  const tfrBtn  = document.getElementById('btn-tfr');
+  stbyBtn.classList.toggle('active-mem', scanPhase >= 1);
+  tfrBtn.classList.toggle('active-mem',  scanPhase === 2);
+  wfBody.classList.toggle('stby-active', scanPhase === 1);
+  document.getElementById('wf-mode-label').textContent =
+    scanPhase === 1 ? '118 – 128 MHz · click to tune' : '118 – 128 MHz · STBY to tune';
+  document.getElementById('stby-freq-display').textContent =
+    scanPhase >= 1 ? (stbyFreq / 1000).toFixed(3) : '—';
 }
 
-function toggleINV() {
-  stepSequence = stepSequence === 'NORMAL' ? 'INVERT' : 'NORMAL';
-  stepPosIndex = 0; stepNegIndex = 0;
-  const isInv = stepSequence === 'INVERT';
-  document.getElementById('btn-inv').classList.toggle('active', isInv);
-  const pill = document.getElementById('pill-inv');
-  pill.classList.toggle('on', isInv);
-  pill.textContent = isInv ? 'INV' : 'NORM';
-  log('Step ' + stepSequence + ' (' + (isInv ? '25→8.33→5' : '5→8.33→25') + ')', 'info');
-}
-
-function tuneMemory(key) {
-  if (activeMemKey && activeMemKey !== key) {
-    memory[activeMemKey] = freq;
-    updateMemBtn(activeMemKey);
+/** Phase 0 → 1: engage STBY — step buttons & waterfall now dial stbyFreq */
+function doStby() {
+  if (scanPhase === 0) {
+    scanPhase = 1;
+    stbyFreq = freq;   // initialise standby from active
+    freqEl.textContent = (stbyFreq / 1000).toFixed(3);
+    log('STBY engaged — dial freq then press TFR', 'info');
+  } else {
+    // Cancel STBY/TFR, return to idle
+    scanPhase = 0;
+    pendingFreq = null;
+    freq = stbyFreq;   // revert active to stby (abandon)
+    freqEl.textContent = (freq / 1000).toFixed(3);
+    log('STBY cancelled', 'info');
   }
-  activeMemKey = key;
-  setFreq(memory[key]);
-  updateMemBtn(key);
-  log(key + ': → ' + (memory[key]/1000).toFixed(3) + ' MHz', 'info');
+  updateTuneMarker();
+  updateScanPhaseUI();
+  updateAllMemBtns();
 }
 
-function storeMemory(key) {
-  memory[key] = freq;
-  updateMemBtn(key);
+/** Phase 1 → 2: TFR — commit stbyFreq as active, wait for destination */
+function doTFR() {
+  if (scanPhase !== 1) { log('TFR: engage STBY first', 'warn'); return; }
+  freq = stbyFreq;
+  pendingFreq = freq;
+  freqEl.textContent = (freq / 1000).toFixed(3);
+  scanPhase = 2;
+  log('TFR → ' + (freq/1000).toFixed(3) + ' MHz — select destination (preset or 1–4)', 'ok');
+  updateTuneMarker();
+  updateScanPhaseUI();
+}
+
+/** Called when user presses a destination button while in phase 2 */
+function commitToDestination(key, type) {
+  if (scanPhase !== 2) return false;
+  if (type === 'preset') {
+    memory[key] = pendingFreq;
+    activeMemKey = key;
+    log(key + ' ← ' + (pendingFreq/1000).toFixed(3) + ' MHz', 'ok');
+  } else {
+    userSlots[key] = pendingFreq;
+    activeMemKey = key;
+    log(key + ' ← ' + (pendingFreq/1000).toFixed(3) + ' MHz', 'ok');
+  }
+  scanPhase = 0;
+  pendingFreq = null;
+  updateScanPhaseUI();
+  updateAllMemBtns();
+  updateUserBtns();
   flashMemBtn(key);
-  log(key + ' ← ' + (freq/1000).toFixed(3) + ' MHz (stored)', 'ok');
+  return true;
+}
+
+/** Normal press of a preset (phase 0): tune to that frequency */
+function tunePreset(key) {
+  freq = memory[key];
+  activeMemKey = key;
+  freqEl.textContent = (freq / 1000).toFixed(3);
+  updateTuneMarker();
+  updateAllMemBtns();
+  log(key + ' → ' + (freq/1000).toFixed(3) + ' MHz', 'info');
+}
+
+/** Normal press of a user slot (phase 0): tune if has freq */
+function tuneUserSlot(key) {
+  if (userSlots[key] === null) { log(key + ': empty — use STBY→TFR to store', 'info'); return; }
+  freq = userSlots[key];
+  activeMemKey = key;
+  freqEl.textContent = (freq / 1000).toFixed(3);
+  updateTuneMarker();
+  updateAllMemBtns();
+  updateUserBtns();
+  log(key + ' → ' + (freq/1000).toFixed(3) + ' MHz', 'info');
+}
+
+function resetPresetDefault(key) {
+  memory[key] = DEFAULT_MEMORY[key];
+  if (activeMemKey === key) {
+    freq = memory[key];
+    freqEl.textContent = (freq / 1000).toFixed(3);
+    updateTuneMarker();
+  }
+  updateAllMemBtns();
+  flashMemBtn(key);
+  log(key + ' reset → ' + (DEFAULT_MEMORY[key]/1000).toFixed(3) + ' MHz', 'info');
+}
+
+function eraseUserSlot(key) {
+  userSlots[key] = null;
+  if (activeMemKey === key) activeMemKey = null;
+  updateUserBtns();
+  const btn = document.getElementById('mem-' + key.toLowerCase());
+  if (btn) {
+    btn.classList.add('erase-flash');
+    setTimeout(() => btn.classList.remove('erase-flash'), 700);
+  }
+  log(key + ' erased', 'warn');
 }
 
 function updateMemBtn(key) {
@@ -434,57 +601,99 @@ function updateMemBtn(key) {
   const btn = document.getElementById('mem-' + k);
   const fEl = document.getElementById('mf-' + k);
   if (!btn || !fEl) return;
-  fEl.textContent = (memory[key]/1000).toFixed(3);
-  document.querySelectorAll('.mem-btn').forEach(b => b.classList.remove('active-mem'));
-  if (key === activeMemKey) btn.classList.add('active-mem');
+  fEl.textContent = (memory[key] / 1000).toFixed(3);
+  btn.classList.toggle('active-mem', key === activeMemKey && scanPhase === 0);
 }
 
 function updateAllMemBtns() { MEM_KEYS.forEach(k => updateMemBtn(k)); }
 
-function flashStepBtn(step, dir) {
-  const id = { '5': dir==='+'?'b-p5':'b-m5', '8.33': dir==='+'?'b-p833':'b-m833', '25': dir==='+'?'b-p25':'b-m25' }[String(step)];
-  const el = id && document.getElementById(id);
-  if (!el) return;
-  const cls = dir === '+' ? 'flash-pos' : 'flash-neg';
-  el.classList.add(cls); setTimeout(() => el.classList.remove(cls), 180);
+function updateUserBtns() {
+  USER_KEYS.forEach(k => {
+    const key = k.toLowerCase();
+    const btn = document.getElementById('mem-' + key);
+    const fEl = document.getElementById('mf-' + key);
+    if (!btn || !fEl) return;
+    const v = userSlots[k];
+    fEl.textContent = v !== null ? (v / 1000).toFixed(3) : '—';
+    btn.classList.toggle('has-freq', v !== null);
+    btn.classList.toggle('active-mem', k === activeMemKey && scanPhase === 0);
+  });
 }
 
 function flashMemBtn(key) {
-  const btn = document.getElementById('mem-' + key.toLowerCase());
+  const id = 'mem-' + key.toLowerCase();
+  const btn = document.getElementById(id);
   if (!btn) return;
   btn.classList.add('store-flash');
   setTimeout(() => btn.classList.remove('store-flash'), 900);
 }
 
+function directStep(khz) {
+  setFreq((scanPhase === 1 ? stbyFreq : freq) + khz);
+  flashStepBtn(Math.abs(khz), khz > 0 ? '+' : '-');
+}
+
+function flashStepBtn(step, dir) {
+  const map = { '5': dir==='+'?'b-p5':'b-m5', '8.33': dir==='+'?'b-p833':'b-m833', '25': dir==='+'?'b-p25':'b-m25' };
+  const el = document.getElementById(map[String(step)]);
+  if (!el) return;
+  const cls = dir === '+' ? 'flash-pos' : 'flash-neg';
+  el.classList.add(cls); setTimeout(() => el.classList.remove(cls), 180);
+}
+
 function toggleMute() {
   isMuted = !isMuted;
   const btn = document.getElementById('btn-mute');
-  btn.textContent = isMuted ? '🔇' : '🔊';
   btn.classList.toggle('muted', isMuted);
-  document.getElementById('pill-mute').classList.toggle('on', isMuted);
-  log(isMuted ? 'Audio muted' : 'Audio unmuted', 'warn');
+  updateStatusPills();
+  log(isMuted ? 'Audio muted' : 'Audio unmuted', isMuted ? 'warn' : 'info');
 }
 
 function initATCControls() {
+  // Step buttons
   document.querySelectorAll('.step-btn').forEach(btn => {
     btn.addEventListener('click', () =>
       directStep(parseFloat(btn.dataset.step) * parseInt(btn.dataset.dir))
     );
   });
 
-  document.getElementById('btn-inv').addEventListener('click', toggleINV);
   document.getElementById('btn-mute').addEventListener('click', toggleMute);
+  document.getElementById('btn-stby').addEventListener('click', doStby);
+  document.getElementById('btn-tfr').addEventListener('click', doTFR);
 
-  document.querySelectorAll('.mem-btn').forEach(btn => {
+  // Preset buttons (APP/TWR/GND/DEL/CTR/ATIS)
+  document.querySelectorAll('.mem-btn[data-type="preset"]').forEach(btn => {
     const key = btn.dataset.key;
     let pt = null;
-    btn.addEventListener('click', () => tuneMemory(key));
-    btn.addEventListener('mousedown', () => { pt = setTimeout(() => { pt = null; storeMemory(key); }, 600); });
+    btn.addEventListener('click', () => {
+      if (commitToDestination(key, 'preset')) return;  // phase 2 → store
+      tunePreset(key);                                  // phase 0 → tune
+    });
+    // 2s long-press = reset to default
+    btn.addEventListener('mousedown', () => {
+      pt = setTimeout(() => { pt = null; resetPresetDefault(key); }, 2000);
+    });
     btn.addEventListener('mouseup',    () => { if (pt) { clearTimeout(pt); pt = null; } });
     btn.addEventListener('mouseleave', () => { if (pt) { clearTimeout(pt); pt = null; } });
-    btn.addEventListener('contextmenu', e => { e.preventDefault(); storeMemory(key); });
   });
 
+  // User slot buttons (1–4)
+  document.querySelectorAll('.mem-btn[data-type="user"]').forEach(btn => {
+    const key = btn.dataset.key;
+    let pt = null;
+    btn.addEventListener('click', () => {
+      if (commitToDestination(key, 'user')) return;  // phase 2 → store
+      tuneUserSlot(key);                              // phase 0 → tune
+    });
+    // 2s long-press = erase slot
+    btn.addEventListener('mousedown', () => {
+      pt = setTimeout(() => { pt = null; eraseUserSlot(key); }, 2000);
+    });
+    btn.addEventListener('mouseup',    () => { if (pt) { clearTimeout(pt); pt = null; } });
+    btn.addEventListener('mouseleave', () => { if (pt) { clearTimeout(pt); pt = null; } });
+  });
+
+  // Sliders
   document.getElementById('vol-slider').addEventListener('input', function() {
     document.getElementById('vol-val').textContent = (+this.value >= 0 ? '+' : '') + this.value + ' dB';
   });
@@ -493,30 +702,23 @@ function initATCControls() {
   });
 
   updateAllMemBtns();
+  updateUserBtns();
   updateStatusPills();
   updateTuneMarker();
-  freqEl.textContent = (freq/1000).toFixed(3);
+  updateScanPhaseUI();
+  freqEl.textContent = (freq / 1000).toFixed(3);
   document.getElementById('pill-tuned').classList.add('on');
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// 4 + 5. WATERFALL — 10 MHz span, ≤40 fps, click-to-tune, hover tooltip
+// WATERFALL — 10 MHz span, ≤40 fps, STBY-only click-to-tune
 // ═══════════════════════════════════════════════════════════════════════
 
-/** Convert canvas X pixel (0..W) → frequency in kHz */
-function wfXtoFreq(x, W) {
-  return WF_MIN_KHZ + (x / W) * WF_SPAN_KHZ;
-}
-
-/** Convert frequency kHz → canvas X pixel */
-function freqToWfX(khz, W) {
-  return ((khz - WF_MIN_KHZ) / WF_SPAN_KHZ) * W;
-}
+function wfXtoFreq(x, W) { return WF_MIN_KHZ + (x / W) * WF_SPAN_KHZ; }
+function freqToWfX(khz, W) { return ((khz - WF_MIN_KHZ) / WF_SPAN_KHZ) * W; }
 
 function renderWaterfall(ts) {
   requestAnimationFrame(renderWaterfall);
-
-  // Throttle to 40 fps (25 ms)
   if (ts - wfLastTs < 25) return;
   wfLastTs = ts;
 
@@ -524,20 +726,16 @@ function renderWaterfall(ts) {
   if (W <= 0 || H <= 0) return;
   wfPhase += 0.025;
 
-  // Build one scanline row (W pixels = 118–128 MHz)
   const row = new Uint8ClampedArray(W * 4);
   for (let i = 0; i < W; i++) {
     const fKhz = wfXtoFreq(i, W);
-    let p = 0.03 + 0.03 * Math.random();  // noise floor
-
+    let p = 0.03 + 0.03 * Math.random();
     for (const pk of EDDN_PEAKS) {
-      // Gaussian peak width ≈ 25 kHz at base
       const df = (fKhz - pk.f) / 25;
       p += pk.amp * (0.65 + 0.35 * Math.sin(wfPhase * (1 + pk.amp) + pk.f * 0.0001))
            * Math.exp(-(df * df));
     }
     p = Math.min(1, p);
-
     let r, g, b;
     if      (p < 0.15) { r=0;              g=Math.round(p/0.15*55);    b=Math.round(p/0.15*85); }
     else if (p < 0.40) { const t=(p-0.15)/0.25; r=0;              g=Math.round(55+t*115);   b=Math.round(85+t*85); }
@@ -546,13 +744,10 @@ function renderWaterfall(ts) {
     const idx = i*4; row[idx]=r; row[idx+1]=g; row[idx+2]=b; row[idx+3]=255;
   }
 
-  // Scroll waterfall history downward
   wfHistory.unshift(row);
   if (wfHistory.length > H) wfHistory.length = H;
 
   const specH = Math.floor(H * 0.38);
-
-  // Render waterfall rows
   const imgData = wfCtx.createImageData(W, H);
   for (let ri = 0; ri < wfHistory.length && ri < H; ri++) {
     if (ri < specH) continue;
@@ -560,25 +755,19 @@ function renderWaterfall(ts) {
   }
   wfCtx.putImageData(imgData, 0, 0);
 
-  // Spectrum zone background
-  wfCtx.fillStyle = 'rgba(10,10,10,0.92)';
-  wfCtx.fillRect(0, 0, W, specH);
+  wfCtx.fillStyle = 'rgba(10,10,10,0.92)'; wfCtx.fillRect(0, 0, W, specH);
 
-  // dB grid lines
   wfCtx.strokeStyle = 'rgba(0,130,100,0.12)'; wfCtx.lineWidth = 1;
   for (let db = 0; db <= 4; db++) {
     const y = specH * (1 - db/4);
     wfCtx.beginPath(); wfCtx.moveTo(0,y); wfCtx.lineTo(W,y); wfCtx.stroke();
   }
-
-  // Vertical frequency grid at each 2 MHz mark
   wfCtx.strokeStyle = 'rgba(0,130,100,0.10)'; wfCtx.lineWidth = 0.5;
   for (let mhz = 118; mhz <= 128; mhz += 2) {
     const gx = freqToWfX(mhz * 1000, W);
     wfCtx.beginPath(); wfCtx.moveTo(gx, 0); wfCtx.lineTo(gx, specH); wfCtx.stroke();
   }
 
-  // Spectrum FFT line
   wfCtx.beginPath(); wfCtx.moveTo(0, specH);
   for (let i = 0; i < W; i++) {
     const fKhz = wfXtoFreq(i, W);
@@ -593,29 +782,34 @@ function renderWaterfall(ts) {
   }
   wfCtx.strokeStyle = 'rgba(0,220,200,0.90)'; wfCtx.lineWidth = 1.5; wfCtx.stroke();
 
-  // Spectrum/waterfall divider
   wfCtx.strokeStyle = 'rgba(0,170,170,0.22)'; wfCtx.lineWidth = 1;
   wfCtx.beginPath(); wfCtx.moveTo(0, specH); wfCtx.lineTo(W, specH); wfCtx.stroke();
 
-  // Tuned-frequency marker — solid white line + notch
-  const tx = freqToWfX(freq, W);
+  // Tune marker — solid white
+  const tx = freqToWfX(scanPhase >= 1 ? stbyFreq : freq, W);
   wfCtx.strokeStyle = 'rgba(255,255,255,0.85)'; wfCtx.lineWidth = 2;
   wfCtx.beginPath(); wfCtx.moveTo(tx, 0); wfCtx.lineTo(tx, H); wfCtx.stroke();
-  wfCtx.fillStyle = '#ffffff';
-  wfCtx.fillRect(tx - 4, 0, 8, 4);
+  wfCtx.fillStyle = '#ffffff'; wfCtx.fillRect(tx - 4, 0, 8, 4);
+
+  // When STBY is active, show active-freq marker as dimmer second line
+  if (scanPhase >= 1) {
+    const ax = freqToWfX(freq, W);
+    wfCtx.strokeStyle = 'rgba(0,170,170,0.55)'; wfCtx.lineWidth = 1;
+    wfCtx.setLineDash([3, 4]);
+    wfCtx.beginPath(); wfCtx.moveTo(ax, 0); wfCtx.lineTo(ax, H); wfCtx.stroke();
+    wfCtx.setLineDash([]);
+  }
 }
 
-// ── 5. Waterfall click-to-tune + hover tooltip ─────────────────────────
-const wfBody = document.getElementById('wf-body');
-
+// Waterfall click — only in STBY mode
 wfBody.addEventListener('click', e => {
+  if (scanPhase !== 1) return;
   const rect = wfCanvas.getBoundingClientRect();
-  const dpr  = window.devicePixelRatio || 1;
-  const rx   = (e.clientX - rect.left) / rect.width;   // 0..1
+  const rx   = (e.clientX - rect.left) / rect.width;
   const khz  = WF_MIN_KHZ + rx * WF_SPAN_KHZ;
-  const snapped = Math.round(khz / 8.33) * 8.33;       // snap to nearest 8.33 kHz channel
+  const snapped = Math.round(khz / 8.33) * 8.33;
   setFreq(snapped);
-  log('WF click → ' + (snapped/1000).toFixed(3) + ' MHz', 'info');
+  log('WF → ' + (snapped/1000).toFixed(3) + ' MHz (STBY)', 'info');
 });
 
 wfBody.addEventListener('mousemove', e => {
@@ -623,17 +817,12 @@ wfBody.addEventListener('mousemove', e => {
   const rx   = (e.clientX - rect.left) / rect.width;
   if (rx < 0 || rx > 1) { wfTooltip.style.display = 'none'; return; }
   const khz  = WF_MIN_KHZ + rx * WF_SPAN_KHZ;
-  const mhz  = (khz / 1000).toFixed(3);
-  wfTooltip.textContent = mhz + ' MHz';
+  wfTooltip.textContent = (khz / 1000).toFixed(3) + ' MHz' + (scanPhase === 1 ? '' : ' · engage STBY');
   wfTooltip.style.display = 'block';
-  // Position tooltip above cursor, horizontally centred
-  const pct  = Math.max(0, Math.min(100, rx * 100));
-  wfTooltip.style.left = pct + '%';
+  wfTooltip.style.left = Math.max(0, Math.min(100, rx * 100)) + '%';
 });
 
-wfBody.addEventListener('mouseleave', () => {
-  wfTooltip.style.display = 'none';
-});
+wfBody.addEventListener('mouseleave', () => { wfTooltip.style.display = 'none'; });
 
 // ═══════════════════════════════════════════════════════════════════════
 // WEBSOCKET + MOCK DATA
@@ -641,22 +830,21 @@ wfBody.addEventListener('mouseleave', () => {
 
 function connectWebSocket() {
   setConnStatus('connecting');
-  log('Connecting to ' + WS_URL + '…', 'info');
+  log('Connecting → ' + WS_URL, 'info');
   let ws;
   try { ws = new WebSocket(WS_URL); }
-  catch(e) { log('WebSocket unavailable — mock mode', 'warn'); startMock(); return; }
+  catch(e) { log('WS unavailable — mock mode', 'warn'); startMock(); return; }
 
   const timeout = setTimeout(() => {
     if (ws.readyState !== WebSocket.OPEN) {
-      log('Timeout — falling back to mock', 'warn');
-      ws.close(); startMock();
+      log('Timeout — mock mode', 'warn'); ws.close(); startMock();
     }
   }, 5000);
 
   ws.onopen = () => {
-    clearTimeout(timeout);
-    setConnStatus('live');
-    log('LIVE data connected ← ' + WS_URL, 'ok');
+    clearTimeout(timeout); setConnStatus('live');
+    isMockMode = false;
+    log('LIVE ← ' + WS_URL, 'ok');
     pollHealth();
   };
   ws.onmessage = e => {
@@ -666,33 +854,45 @@ function connectWebSocket() {
   ws.onerror = () => { clearTimeout(timeout); log('WS error — mock mode', 'warn'); startMock(); };
   ws.onclose = () => {
     if (document.getElementById('conn-badge').classList.contains('badge-live')) {
-      log('WS closed — reconnect in 5s', 'warn'); setConnStatus('connecting');
+      log('WS closed — reconnect 5s', 'warn'); setConnStatus('connecting');
       setTimeout(connectWebSocket, 5000);
     }
   };
 }
 
-/** Poll /health once on connect and log backend status */
 async function pollHealth() {
   try {
     const r = await fetch(HEALTH, { signal: AbortSignal.timeout(3000) });
     const j = await r.json();
-    log('Backend health: ' + JSON.stringify(j), 'ok');
+    log('Health: ' + JSON.stringify(j), 'ok');
   } catch(e) {
-    // Health endpoint optional — don't surface as error
-    log('Health endpoint not available (' + HEALTH + ')', 'info');
+    log('Health endpoint n/a', 'info');
   }
 }
 
+// ── 5. Live mode track handling with signal lifetime ───────────────────
 function handleTracksMsg(arr) {
+  const now = Date.now() / 1000;
   const live = new Set();
   arr.forEach(t => {
     live.add(t.icao);
     const ex = tracks.get(t.icao) || {};
-    if (!ex._state) t._state = assignState(t.icao);
+    if (!ex._state)    t._state    = assignState(t.icao);
+    if (!ex._firstSeen) t._firstSeen = now;
+    else t._firstSeen = ex._firstSeen;
+    t._lastSeen = now;
+    const age = now - t._firstSeen;
+    t._ploc = age >= SIGNAL_PLOC_AGE;   // show PLOC badge if >30s
     tracks.set(t.icao, Object.assign(ex, t));
   });
-  for (const id of tracks.keys()) if (!live.has(id)) tracks.delete(id);
+
+  // Remove stale tracks (>60s without update)
+  for (const [id, t] of tracks) {
+    if (!live.has(id)) {
+      const age = now - (t._lastSeen || now);
+      if (age > SIGNAL_MAX_AGE) tracks.delete(id);
+    }
+  }
   trackCountEl.textContent = tracks.size;
 }
 
@@ -702,13 +902,14 @@ function setConnStatus(s) {
     { connecting:'CONNECTING', live:'LIVE', mock:'MOCK' }[s] || s.toUpperCase();
 }
 
+// ── Mock data ─────────────────────────────────────────────────────────
 const MOCK_CALLS   = ['DLH123','BAW456','EZY789','RYR321','AFR654','KLM987','UAE112','THY334','SAS556','IBE778','SWR990','AUA112'];
 const MOCK_SQUAWKS = ['7000','7000','7000','7000','2000','1200','7500','7600','7700','7000','2000','7000'];
 let mockAc = [], mockTimer = null;
 
 function startMock() {
   if (mockTimer) return;
-  setConnStatus('mock');
+  setConnStatus('mock'); isMockMode = true;
   log('Mock mode — 11 aircraft (EDDN area)', 'warn');
   for (let i = 0; i < 11; i++) mockAc.push(spawnAc(i));
   pushMock();
@@ -729,6 +930,7 @@ function spawnAc(i) {
     squawk: MOCK_SQUAWKS[i % MOCK_SQUAWKS.length],
     _vr: (Math.random() > 0.5 ? 1 : -1) * Math.floor(Math.random() * 1200),
     _state: assignState(icao),
+    _ploc: false,
   };
 }
 
@@ -783,7 +985,6 @@ function resize() {
   const rw = document.getElementById('radar-wrap'), dpr = window.devicePixelRatio || 1;
   canvas.width  = rw.clientWidth  * dpr; canvas.height = rw.clientHeight * dpr;
   canvas.style.width  = rw.clientWidth  + 'px'; canvas.style.height = rw.clientHeight + 'px';
-
   const wb = document.getElementById('wf-body');
   const wh = Math.max(1, wb.clientHeight - 14);
   wfCanvas.width  = wb.clientWidth  * dpr; wfCanvas.height = wh * dpr;
@@ -794,7 +995,7 @@ window.addEventListener('resize', resize);
 resize();
 
 // ═══════════════════════════════════════════════════════════════════════
-// RADAR RENDER LOOP  (≤30 fps — unchanged)
+// RADAR RENDER LOOP
 // ═══════════════════════════════════════════════════════════════════════
 
 const RINGS = [5, 10, 20, 40, 80, 120];
@@ -807,7 +1008,6 @@ function render(ts) {
   const W = canvas.width, H = canvas.height, dpr = window.devicePixelRatio || 1;
   ctx.clearRect(0, 0, W, H);
 
-  // Background + vignette
   ctx.fillStyle = '#0a0a0a'; ctx.fillRect(0, 0, W, H);
   const vg = ctx.createRadialGradient(W/2,H/2,0,W/2,H/2,Math.max(W,H)*0.65);
   vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,'rgba(0,0,0,0.55)');
@@ -865,6 +1065,7 @@ function render(ts) {
   rangeNmEl.textContent = (rangeNM / viewScale).toFixed(0);
 }
 
+// ── 1. Aircraft symbol: white square, 25% of previous diamond size ────
 function drawAircraftSymbol(sx, sy, t, isSel, dpr, mpp) {
   const col = getTagColor(t.squawk);
 
@@ -878,7 +1079,7 @@ function drawAircraftSymbol(sx, sy, t, isSel, dpr, mpp) {
     ctx.setLineDash([]); ctx.globalAlpha = 1;
   }
 
-  // Selection glow
+  // Selection glow (unchanged)
   if (isSel) {
     const gw = 16*dpr + Math.sin(pulsePhase)*5*dpr;
     const g = ctx.createRadialGradient(sx,sy,0,sx,sy,gw);
@@ -886,18 +1087,16 @@ function drawAircraftSymbol(sx, sy, t, isSel, dpr, mpp) {
     ctx.beginPath(); ctx.arc(sx,sy,gw,0,Math.PI*2); ctx.fillStyle=g; ctx.fill();
   }
 
-  // Chevron — green fill, colour-coded stroke
-  const sz = (isSel ? 9 : 6)*dpr;
-  ctx.save(); ctx.translate(sx,sy); ctx.rotate(t.heading*Math.PI/180);
-  ctx.beginPath(); ctx.moveTo(0,-sz*1.8); ctx.lineTo(sz,0); ctx.lineTo(0,sz*0.85); ctx.lineTo(-sz,0); ctx.closePath();
-  ctx.fillStyle   = '#00ff88';
-  ctx.strokeStyle = isSel ? col : '#ffffff';
-  ctx.lineWidth   = dpr * (isSel ? 2 : 1.2);
-  ctx.fill(); ctx.stroke(); ctx.restore();
+  // White square — 25% of old diamond size:
+  //   old normal sz = 6*dpr, old selected sz = 9*dpr (diameter ~18px / 27px)
+  //   new: half-side = 1.5*dpr (normal), 2.25*dpr (selected) → ~6px / 9px square
+  const half = (isSel ? 2.5 : 1.5) * dpr;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(sx - half, sy - half, half * 2, half * 2);
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// MOUSE / ZOOM (radar only)
+// MOUSE / ZOOM — radar pan, aircraft select, tag drag
 // ═══════════════════════════════════════════════════════════════════════
 
 const radarWrap = document.getElementById('radar-wrap');
@@ -905,33 +1104,71 @@ const radarWrap = document.getElementById('radar-wrap');
 radarWrap.addEventListener('mousedown', e => {
   const rect = canvas.getBoundingClientRect(), dpr = window.devicePixelRatio||1;
   const ex = (e.clientX-rect.left)*dpr, ey = (e.clientY-rect.top)*dpr;
+
+  // 1. Check for tag-label drag hit first
+  const tagHit = hitTestTag(ex, ey);
+  if (tagHit) {
+    isDraggingTag = true;
+    dragTagIcao = tagHit;
+    const off = tagOffsets.get(tagHit) || { dx: Math.round(12*dpr), dy: 0 };
+    const [sx,sy] = ll2c(tracks.get(tagHit).lat, tracks.get(tagHit).lon);
+    // Store cursor offset relative to current tag position
+    dragTagDX = ex - (sx + off.dx);
+    dragTagDY = ey - (sy + off.dy);
+    radarWrap.style.cursor = 'move';
+    return;
+  }
+
+  // 2. Aircraft symbol click
   const hit = hitTest(ex, ey);
   if (hit) { selectTrack(hit); return; }
+
+  // 3. Radar pan
   isDragging = true; dragSX=e.clientX; dragSY=e.clientY; panSX=panX; panSY=panY;
   radarWrap.style.cursor = 'grabbing';
 });
 
 window.addEventListener('mousemove', e => {
+  const dpr = window.devicePixelRatio||1;
+
+  if (isDraggingTag && dragTagIcao) {
+    const t = tracks.get(dragTagIcao);
+    if (t) {
+      const rect = canvas.getBoundingClientRect();
+      const ex = (e.clientX-rect.left)*dpr, ey = (e.clientY-rect.top)*dpr;
+      const [sx,sy] = ll2c(t.lat, t.lon);
+      tagOffsets.set(dragTagIcao, {
+        dx: Math.round(ex - dragTagDX - sx),
+        dy: Math.round(ey - dragTagDY - sy),
+      });
+    }
+    return;
+  }
+
   if (!isDragging) {
     const rect = canvas.getBoundingClientRect();
     if (rect.width > 0) {
-      const dpr = window.devicePixelRatio||1;
       const [lat,lon] = c2ll((e.clientX-rect.left)*dpr, (e.clientY-rect.top)*dpr);
       cursorLlEl.textContent = `${Math.abs(lat).toFixed(2)}°${lat>=0?'N':'S'} ${Math.abs(lon).toFixed(2)}°${lon>=0?'E':'W'}`;
     }
     return;
   }
-  const dpr = window.devicePixelRatio||1;
   panX = panSX + (e.clientX-dragSX)*dpr; panY = panSY + (e.clientY-dragSY)*dpr;
 });
 
-window.addEventListener('mouseup', () => { isDragging=false; radarWrap.style.cursor='crosshair'; });
+window.addEventListener('mouseup', () => {
+  isDragging = false;
+  isDraggingTag = false;
+  dragTagIcao = null;
+  radarWrap.style.cursor = 'crosshair';
+});
 
 radarWrap.addEventListener('wheel', e => {
   e.preventDefault();
   viewScale = Math.max(0.5, Math.min(8, viewScale * (e.deltaY > 0 ? 1.15 : 1/1.15)));
 }, { passive: false });
 
+/** Hit-test aircraft symbols */
 function hitTest(ex, ey) {
   const HIT = 16 * (window.devicePixelRatio||1); let best=null, bestD=Infinity;
   for (const [icao,t] of tracks) {
@@ -942,31 +1179,73 @@ function hitTest(ex, ey) {
   return best;
 }
 
+/** Hit-test tag label areas (approximate bounding box) */
+function hitTestTag(ex, ey) {
+  const dpr = window.devicePixelRatio||1;
+  const fPx = 11, lineH = (fPx + 3) * dpr;
+  const approxW = 70 * dpr, approxH = 4 * lineH;
+  for (const [icao, t] of tracks) {
+    if (t.lat == null) continue;
+    const [sx, sy] = ll2c(t.lat, t.lon);
+    const off = tagOffsets.get(icao) || { dx: Math.round(12*dpr), dy: 0 };
+    const TX = sx + off.dx, TY = sy + off.dy - lineH * 2;
+    if (ex >= TX && ex <= TX + approxW && ey >= TY && ey <= TY + approxH) return icao;
+  }
+  return null;
+}
+
+// ── 6. Select / deselect with auto open/close panel ───────────────────
 function selectTrack(icao) {
   if (selected === icao) {
-    selected = null; selEmpty.style.display=''; selDetail.style.display='none'; return;
+    selected = null;
+    selEmpty.style.display = ''; selDetail.style.display = 'none';
+    setRightPanel(false);   // auto-collapse on deselect
+    return;
   }
-  selected = icao; updateSelPanel();
+  selected = icao;
+  setRightPanel(true);      // auto-open on select
+  updateSelPanel();
   const t = tracks.get(icao);
   log('Selected: ' + (t?.callsign||icao), 'info');
 }
 
+// ── 4. Selected track panel with EDDN/NUE coordinates ─────────────────
 function updateSelPanel() {
   if (!selected) return;
   const t = tracks.get(selected);
   if (!t) { selEmpty.style.display=''; selDetail.style.display='none'; selected=null; return; }
   selEmpty.style.display='none'; selDetail.style.display='grid';
   const ex = getMockExtras(t);
+  const sqTok = getSquawkToken(t.squawk);
+
+  // Distance and bearing from EDDN/NUE reference
+  const distNm = gcdist(t.lat, t.lon, REF_LAT, REF_LON).toFixed(1);
+  const bearRad = Math.atan2(
+    (t.lon - REF_LON) * Math.cos(REF_LAT * Math.PI/180),
+    t.lat - REF_LAT
+  );
+  const bearDeg = ((bearRad * 180/Math.PI) + 360) % 360;
+
   const rows = [
-    ['ICAO',t.icao],['CALL',t.callsign||'—'],
-    ['SQI',getSQI(t.squawk)||'—'],['SQK',t.squawk||'—'],
-    ['WTC',getWTC(t.callsign)||'—'],['ATYP',getATYP(t.callsign)||'—'],
-    ['AFL',formatFL(t.altitude)],['CFL',ex.cfl||'—'],
-    ['V/R',(t._vr>0?'+':'')+t._vr+'fpm'],['CRC',formatCRC(t._vr)||'—'],
-    ['ARC',ex.arc||'—'],['SI',ex.si],['COP',ex.cop],
-    ['GS',Math.round(t.groundspeed||0)+'kt'],['HDG',(t.heading|0)+'°'],
-    ['COL',getTagColor(t.squawk)],
-    ['LAT',t.lat?.toFixed(4)+'°'],['LON',t.lon?.toFixed(4)+'°'],
+    ['ICAO',  t.icao],
+    ['CALL',  t.callsign || '—'],
+    ['SQK',   sqTok.text],
+    ['WTC',   getWTC(t.callsign) || '—'],
+    ['ATYP',  getATYP(t.callsign) || '—'],
+    ['AFL',   formatFL(t.altitude)],
+    ['CFL',   ex.cfl || '—'],
+    ['V/R',   (t._vr > 0 ? '+' : '') + (t._vr||0) + 'fpm'],
+    ['GS',    Math.round(t.groundspeed||0) + 'kt'],
+    ['HDG',   (t.heading|0) + '°'],
+    ['SI',    ex.si],
+    ['COP',   ex.cop],
+    // 4. EDDN/NUE relative coordinates
+    ['REF',   REF_ICAO + '/' + REF_IATA],
+    ['DIST',  distNm + ' NM'],
+    ['BRG',   bearDeg.toFixed(0) + '°'],
+    ['LAT',   (t.lat||0).toFixed(4) + '°' + (t.lat>=0?'N':'S')],
+    ['LON',   (t.lon||0).toFixed(4) + '°' + (t.lon>=0?'E':'W')],
+    ['PLOC',  t._ploc ? 'YES' : 'NO'],
   ];
   selDetail.innerHTML = rows.map(([k,v]) =>
     `<span class="sel-key">${k}</span><span class="sel-val ${k==='CALL'?'hi':''}">${v}</span>`
@@ -1006,10 +1285,10 @@ function log(msg, type='info') {
 // BOOT
 // ═══════════════════════════════════════════════════════════════════════
 
-log('PIRX v0.6.0 — EDDN Nuremberg mode', 'ok');
+log('PIRX v0.7.2 — EDDN/NUE Nuremberg', 'ok');
 log('WS → ' + WS_URL, 'info');
-log('WF: 118–128 MHz · click to tune · hover for freq', 'info');
-log('Tags: GREEN=VFR · BLUE=IFR · RED=EMRG', 'info');
+log('Tags: V=VFR(green) code=IFR(blue) code=EMRG(red) PLOC=aging(orange)', 'info');
+log('STBY to unlock presets + waterfall tuning', 'info');
 
 initATCControls();
 connectWebSocket();

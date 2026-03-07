@@ -13,6 +13,80 @@ _Changes staged but not yet tagged._
 
 ---
 
+## [0.7.0] — 2026-03-06
+
+### Changed — 6 production improvements across all three files
+
+#### 1. Aircraft symbols — white squares, 25% size
+
+- **Changed** `drawAircraftSymbol` — replaced heading-rotated chevron (`ctx.rotate` + `ctx.beginPath` diamond path) with `ctx.fillRect`.
+- **Changed** symbol to pure `#ffffff` white fill, no stroke, no rotation.
+- **Changed** size: normal half-side `1.5 * dpr` (≈3 px), selected `2.5 * dpr` (≈5 px). Previous diamond normal radius was `6 * dpr` (≈12 px diameter).
+- **Preserved** velocity leader, selection glow pulse, hit-test radius.
+
+#### 2. Top tag line — squawk-only, no WARNINGS
+
+- **Added** `getSquawkToken(squawk)` — returns `{ text, color }`:
+  - `7000` → `{ text:'V', color:'#00ff88' }` (green)
+  - `7500/7600/7700` → `{ text: squawk, color:'#ff4444' }` (red)
+  - all others → `{ text: squawk, color:'#66ccff' }` (blue)
+- **Changed** `getTaggedLines` row 1 — uses `getSquawkToken`, never renders `WARNINGS`.
+- **Changed** `getDetailedLines` row 1 — same; `WARNINGS` token removed entirely.
+- **Changed** `drawTag` token rendering — tokens now support `{ text, color?, dim? }`. `color` overrides track colour for row-1 squawk token and PLOC badge.
+- **Removed** `isUrg` check and all `WARNINGS` string references from tag builders.
+- **Removed** hex ICAO from tag row 1 (was never rendered in v0.6 — confirmed absent).
+
+#### 3. Frequency panel — STBY/TFR workflow, protected presets
+
+- **Added** `isStby` boolean state — controls whether presets and waterfall are editable.
+- **Added** `stbyFreq` variable — separate standby frequency distinct from active `freq`.
+- **Added** `toggleStby()` — engages/disengages STBY mode; initialises `stbyFreq = freq` on engage; toggles `#btn-stby.active` class; toggles `#wf-body.stby-active`; updates waterfall subtitle label.
+- **Added** `doTFR()` — transfers `stbyFreq → freq`; highlights `#btn-tfr.active`; no-op with log warning if STBY is not engaged.
+- **Changed** `setFreq(khz)` — writes to `stbyFreq` when `isStby`, to `freq` otherwise.
+- **Changed** `tuneMemory(key)` — now stores current `stbyFreq` into preset slot; returns early with warning if STBY is not active.
+- **Added** `resetMemoryDefault(key)` — restores `DEFAULT_MEMORY[key]`; triggered by 2-second `mousedown` timer on preset buttons.
+- **Added** `DEFAULT_MEMORY` object — immutable copy of factory EDDN defaults used for reset.
+- **Changed** preset long-press threshold from 600 ms (old store-to-preset) to 2000 ms (reset-to-default).
+- **Removed** old right-click `contextmenu` store shortcut.
+- **Changed** waterfall `click` listener — guarded with `if (!isStby) return`.
+- **Changed** waterfall hover tooltip — appends `· engage STBY` hint when STBY is not active.
+- **Added** `#btn-stby` and `#btn-tfr` in `index.html` inside `.atc-stby-tfr` wrapper.
+- **Added** `.atc-stby-tfr`, `.stby-tfr-btn`, `.stby-tfr-btn.active` CSS rules.
+- **Added** `#wf-body.stby-active { cursor:crosshair }` CSS; base `#wf-body` cursor changed to `not-allowed`.
+- **Changed** `index.html` waterfall subtitle from static text to `id="wf-mode-label"` toggled by JS.
+
+#### 4. EDDN/NUE coordinates in selected track panel
+
+- **Added** `REF_ICAO = 'EDDN'`, `REF_IATA = 'NUE'` constants.
+- **Changed** `updateSelPanel()` — computes great-circle distance (`gcdist`) and bearing from REF to track.
+- **Added** rows to selected panel: `REF` (EDDN/NUE), `DIST` (NM), `BRG` (°), `PLOC` (YES/NO).
+- **Changed** `LAT` / `LON` display — appends N/S/E/W suffix.
+- **Changed** topbar REF display in `index.html` — now reads `EDDN/NUE 49°29'N 011°05'E`.
+
+#### 5. Live mode signal lifetime
+
+- **Added** `SIGNAL_PLOC_AGE = 30` and `SIGNAL_MAX_AGE = 60` constants (seconds).
+- **Added** `isMockMode` flag — lifetime logic only runs in live mode.
+- **Changed** `handleTracksMsg()`:
+  - Stamps `_firstSeen` on first appearance; updates `_lastSeen` on every message.
+  - Sets `track._ploc = age >= SIGNAL_PLOC_AGE`.
+  - Removes tracks where `age > SIGNAL_MAX_AGE` and not in current live set.
+- **Changed** `getTaggedLines` / `getDetailedLines` row 1 — appends `{ text:'PLOC', color:'#ff8c00' }` when `track._ploc` is truthy.
+- **Added** `--ploc: #ff8c00` CSS variable.
+- **Changed** mock aircraft — `_ploc: false` preset (mock tracks never age out).
+
+#### 6. Collapsible selected track panel
+
+- **Added** `rpCollapsed` boolean state.
+- **Added** `setRightPanel(open)` — toggles `.collapsed` class on `#right-panel`; updates `#rp-toggle` glyph (`›` / `‹`); calls `setTimeout(resize, 200)` after CSS transition.
+- **Changed** `selectTrack(icao)` — calls `setRightPanel(true)` on select, `setRightPanel(false)` on deselect.
+- **Added** `#rp-toggle` div in `index.html` — 12 px wide strip on the border.
+- **Added** `#rp-toggle` CSS — flex centred, hover cyan glow.
+- **Added** `#right-panel.collapsed { width:0; border-left:none }` CSS.
+- **Added** `transition: width 0.18s ease` on `#right-panel`.
+
+---
+
 ## [0.6.0] — 2026-03-04
 
 ### Changed — 6 production improvements across all three files

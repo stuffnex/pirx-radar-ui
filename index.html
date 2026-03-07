@@ -13,7 +13,7 @@
 <header id="topbar">
   <div id="tl">
     <span id="logo-mark">⬡</span>
-    <span id="app-title">PIRX <span class="title-dim">Radar / SDR Console</span></span>
+    <span id="app-title">PIRX <span class="title-dim">Radar / SDR Console</span> <span class="title-ver">v0.7.2</span></span>
   </div>
   <div id="tc">
     <div id="conn-badge" class="badge badge-mock">
@@ -23,7 +23,7 @@
     <div id="tc-stats">
       <span><span id="track-count" class="hi">0</span> <span class="lbl-dim">TRACKS</span></span>
       <span>RNG <span id="range-nm" class="val">40</span><span class="lbl-dim">NM</span></span>
-      <span><span class="lbl-dim">REF</span> 49°29'N 011°05'E</span>
+      <span style="display:flex;flex-direction:column;align-items:flex-start;line-height:1.3"><span><span class="lbl-dim">REF</span> EDDN/NUE</span><span style="font-size:9px;color:var(--txt-lo);letter-spacing:.04em">49°29'55"N 011°04'41"E</span></span>
     </div>
   </div>
   <div id="tr">
@@ -32,23 +32,21 @@
   </div>
 </header>
 
-<!-- ═══ MIDDLE: radar + selected track panel ═══ -->
+<!-- ═══ MIDDLE: radar + collapsible selected track panel ═══ -->
 <div id="mid">
-
   <div id="radar-wrap">
     <canvas id="radar"></canvas>
     <div id="radar-overlay">
       <div><span class="ov-label">CURSOR</span><span class="ov-val" id="cursor-ov">--</span></div>
     </div>
   </div>
-
+  <div id="rp-toggle" title="Toggle track panel">&#8250;</div>
   <div id="right-panel">
     <div class="rp-title"><span class="rp-icon">⊕</span> Selected Track</div>
     <div id="sel-empty">CLICK AIRCRAFT<br>TO SELECT</div>
     <div id="sel-detail" style="display:none"></div>
   </div>
-
-</div><!-- /mid -->
+</div>
 
 <!-- ═══ BOTTOM STRIP ═══ -->
 <div id="bottom">
@@ -65,14 +63,13 @@
           <span class="freq-unit">MHz</span>
         </div>
         <div class="atc-status-pills">
-          <span class="status-pill pill-tuned" id="pill-tuned">TUNED</span>
+          <span class="status-pill pill-tuned"  id="pill-tuned">TUNED</span>
           <span class="status-pill pill-active" id="pill-active">ACTIVE</span>
-          <span class="status-pill pill-mute" id="pill-mute">MUTE</span>
-          <span class="status-pill pill-inv" id="pill-inv">NORM</span>
+          <span class="status-pill pill-mute"   id="pill-mute">MUTE</span>
         </div>
       </div>
 
-      <!-- Row 2: Step buttons + INV -->
+      <!-- Row 2: Step buttons (no INV) -->
       <div class="atc-step-row">
         <button class="step-btn neg" id="b-m25"  data-step="25"   data-dir="-1">−25</button>
         <button class="step-btn neg" id="b-m833" data-step="8.33" data-dir="-1">−8.33</button>
@@ -81,10 +78,9 @@
         <button class="step-btn pos" id="b-p5"   data-step="5"    data-dir="1">+5</button>
         <button class="step-btn pos" id="b-p833" data-step="8.33" data-dir="1">+8.33</button>
         <button class="step-btn pos" id="b-p25"  data-step="25"   data-dir="1">+25</button>
-        <button class="inv-btn" id="btn-inv" title="Toggle step order NORM ↔ INV">INV</button>
       </div>
 
-      <!-- Row 3: Volume + Squelch + Mute -->
+      <!-- Row 3: Volume + Squelch + MUTE toggle button -->
       <div class="atc-slider-row">
         <span class="slider-lbl">VOL</span>
         <input type="range" class="sdr-slider" id="vol-slider" min="-60" max="0" value="-10" step="1">
@@ -92,53 +88,68 @@
         <span class="slider-lbl" style="margin-left:6px">SQL</span>
         <input type="range" class="sdr-slider" id="sql-slider" min="-80" max="0" value="-40" step="1">
         <span class="slider-val" id="sql-val">−40 dB</span>
-        <button class="mute-btn" id="btn-mute">🔊</button>
+        <button class="mute-toggle-btn" id="btn-mute" title="Toggle audio mute">MUTE</button>
       </div>
 
-      <!-- Row 4: 6 memory buttons — all in one row, no MEM label -->
+      <!-- Row 4: 6 protected ATC preset buttons -->
       <div class="atc-mem-row">
-        <button class="mem-btn" id="mem-app" data-key="APP">
-          <span class="mem-name">APP</span>
-          <span class="mem-freq" id="mf-app">119.475</span>
+        <button class="mem-btn" id="mem-app"  data-key="APP"  data-type="preset">
+          <span class="mem-name">APP</span><span class="mem-freq" id="mf-app">119.475</span>
         </button>
-        <button class="mem-btn" id="mem-twr" data-key="TWR">
-          <span class="mem-name">TWR</span>
-          <span class="mem-freq" id="mf-twr">118.305</span>
+        <button class="mem-btn" id="mem-twr"  data-key="TWR"  data-type="preset">
+          <span class="mem-name">TWR</span><span class="mem-freq" id="mf-twr">118.305</span>
         </button>
-        <button class="mem-btn" id="mem-gnd" data-key="GND">
-          <span class="mem-name">GND</span>
-          <span class="mem-freq" id="mf-gnd">121.760</span>
+        <button class="mem-btn" id="mem-gnd"  data-key="GND"  data-type="preset">
+          <span class="mem-name">GND</span><span class="mem-freq" id="mf-gnd">121.760</span>
         </button>
-        <button class="mem-btn" id="mem-del" data-key="DEL">
-          <span class="mem-name">DEL</span>
-          <span class="mem-freq" id="mf-del">121.760</span>
+        <button class="mem-btn" id="mem-del"  data-key="DEL"  data-type="preset">
+          <span class="mem-name">DEL</span><span class="mem-freq" id="mf-del">121.760</span>
         </button>
-        <button class="mem-btn" id="mem-ctr" data-key="CTR">
-          <span class="mem-name">CTR</span>
-          <span class="mem-freq" id="mf-ctr">129.525</span>
+        <button class="mem-btn" id="mem-ctr"  data-key="CTR"  data-type="preset">
+          <span class="mem-name">CTR</span><span class="mem-freq" id="mf-ctr">129.525</span>
         </button>
-        <button class="mem-btn" id="mem-atis" data-key="ATIS">
-          <span class="mem-name">ATIS</span>
-          <span class="mem-freq" id="mf-atis">123.080</span>
+        <button class="mem-btn" id="mem-atis" data-key="ATIS" data-type="preset">
+          <span class="mem-name">ATIS</span><span class="mem-freq" id="mf-atis">123.080</span>
+        </button>
+      </div>
+
+      <!-- Row 5: STBY · TFR · User slots 1–4  (same size as mem-btn) -->
+      <div class="atc-mem-row">
+        <button class="mem-btn stby-btn" id="btn-stby" title="Standby — dial freq then TFR">
+          <span class="mem-name">STBY</span>
+          <span class="mem-freq" id="stby-freq-display">—</span>
+        </button>
+        <button class="mem-btn tfr-btn" id="btn-tfr" title="Transfer standby freq, then pick destination">
+          <span class="mem-name">TFR</span>
+          <span class="mem-freq">→</span>
+        </button>
+        <button class="mem-btn user-btn" id="mem-u1" data-key="U1" data-type="user">
+          <span class="mem-name">1</span><span class="mem-freq" id="mf-u1">—</span>
+        </button>
+        <button class="mem-btn user-btn" id="mem-u2" data-key="U2" data-type="user">
+          <span class="mem-name">2</span><span class="mem-freq" id="mf-u2">—</span>
+        </button>
+        <button class="mem-btn user-btn" id="mem-u3" data-key="U3" data-type="user">
+          <span class="mem-name">3</span><span class="mem-freq" id="mf-u3">—</span>
+        </button>
+        <button class="mem-btn user-btn" id="mem-u4" data-key="U4" data-type="user">
+          <span class="mem-name">4</span><span class="mem-freq" id="mf-u4">—</span>
         </button>
       </div>
 
     </div>
   </div><!-- /sdr-section -->
 
-  <!-- FFT / Waterfall — 10 MHz span, click-to-tune -->
+  <!-- FFT / Waterfall -->
   <div class="bot-section" id="wf-section">
     <div class="bot-title">
       <span class="bot-icon">◈</span> FFT / Waterfall
-      <span class="bot-sub">118 – 128 MHz · click to tune</span>
+      <span class="bot-sub" id="wf-mode-label">118 – 128 MHz · STBY to tune</span>
     </div>
     <div id="wf-body">
       <canvas id="wf-canvas"></canvas>
-      <!-- Hover frequency tooltip -->
       <div id="wf-tooltip"></div>
-      <!-- Tuned-frequency marker (left% set by JS) -->
       <div class="wf-tune-line" id="wf-tune-line"></div>
-      <!-- Axis labels — 6 fixed MHz ticks -->
       <div id="wf-freq-axis">
         <span class="wf-tick">118</span>
         <span class="wf-tick">120</span>
@@ -148,13 +159,13 @@
         <span class="wf-tick">128</span>
       </div>
     </div>
-  </div><!-- /wf-section -->
+  </div>
 
   <!-- System Log -->
   <div class="bot-section" id="log-section">
     <div class="bot-title"><span class="bot-icon">▸</span> System Log</div>
     <div id="log-body"></div>
-  </div><!-- /log-section -->
+  </div>
 
 </div><!-- /bottom -->
 
