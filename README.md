@@ -3,7 +3,7 @@
 A browser-based ATC radar display and VHF communications scanner.
 Zero dependencies, zero build step — three static files, any host.
 
-**Version:** 0.7.0 · **Reference:** EDDN/NUE Nuremberg · See [CHANGELOG.md](CHANGELOG.md)
+**Version:** 0.8.0 · **Reference:** EDDN/NUE Nuremberg · See [CHANGELOG.md](CHANGELOG.md)
 
 ---
 
@@ -147,6 +147,77 @@ pirx-radar-ui/
 
 ---
 
+
+---
+
+## Real-time Audio Receiver (auto-streaming)
+
+PIRX v0.8.0 adds an always-on VHF audio receiver that behaves like a real ATC scanner — no play buttons, no user action required.
+
+### How it works
+
+When the active frequency changes (preset click, TFR commit, user slot tune) the frontend **immediately connects** to the backend audio stream for that frequency. The stream stays open 24/7 until the frequency changes or the tab is closed.
+
+```
+Frequency change → audioConnect(freq)
+  └─ GET /audio/stream?freq=119.475  (chunked audio/mpeg)
+       ├── ● LIVE       — streaming normally
+       ├── ⚠ BUFFERING  — connecting / stalled
+       └── ✗ OFFLINE    — backend unavailable (3 retries × 3 s)
+```
+
+### Status indicator
+
+The status dot sits inline in the frequency row, right of TUNED / ACTIVE:
+
+| State | Dot colour | Label |
+|---|---|---|
+| Streaming | Green glow | `LIVE` |
+| Connecting / stalled | Amber | `BUFFERING` |
+| Unavailable | Dim | `OFFLINE` |
+
+### Mute toggle
+
+The **MUTE** button in the frequency row toggles audio silence without disconnecting the stream. While muted the button shows **UNMUTE**. The underlying stream stays connected — unmuting resumes instantly with no reconnect delay.
+
+### STBY/TFR behaviour
+
+- **STBY mode** (dialling a new frequency): audio **stays on the current active** frequency — no interruption while browsing.
+- **TFR** (commit standby to active): audio **switches immediately** to the new frequency.
+
+### Backend API this frontend expects
+
+```
+GET /audio/stream?freq=<MHz>
+  Response: Content-Type: audio/mpeg
+            Transfer-Encoding: chunked
+            Connection: keep-alive
+  Body: continuous MP3 / AAC stream of demodulated VHF-AM audio
+```
+
+Alternatively a WebSocket endpoint can be used — replace `AUDIO_STREAM_URL()` in `app.js`:
+
+```js
+// HTTP stream (default)
+function AUDIO_STREAM_URL(khz) {
+  return `${API_BASE}/audio/stream?freq=${(khz/1000).toFixed(3)}`;
+}
+
+// WebSocket alternative — swap <audio>.src for a WebSocket + AudioContext
+// (requires additional Web Audio API plumbing)
+```
+
+### Retry logic
+
+On stream error the frontend retries up to `AUDIO_MAX_RETRIES` (3) times with `AUDIO_RETRY_MS` (3 000 ms) between attempts. After three failures the status shows `OFFLINE` and retrying stops. A subsequent frequency change resets the retry counter and reconnects.
+
+### Pi performance notes
+
+- Uses a single `<audio>` element — zero Web Audio API overhead
+- Stream is paused (not disconnected) on mute — no reconnect cost
+- Old stream torn down before new one opens — no concurrent connections
+- Graceful on backend restart — next frequency change reconnects automatically
+
 ## Deployment
 
 ### Static file serving (any host)
@@ -232,6 +303,7 @@ Tested on Raspberry Pi 4 Chromium (1024×600).
 | M1 | ✅ | Static frontend, mock data, iCAS2 labels, ATC scanner |
 | M2 | ✅ | 10 MHz waterfall, click-to-tune, EDDN frequencies, clean tags |
 | M3 | ✅ | STBY/TFR workflow, collapsible panel, white squares, signal lifetime |
+| M4-audio | ✅ | Always-on audio receiver, auto-stream on freq change, mute toggle |
 | M4 | — | Real FFT — RTL-SDR or WebSDR WebSocket feed |
 | M5 | — | Sector geometry overlay (TMA / CTR / airways GeoJSON) |
 | M6 | — | Live ADSB adapter (OpenSky / ADSB-Exchange) |

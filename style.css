@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════
-   PIRX Radar / SDR Console — style.css  v0.7.0
+   PIRX Radar / SDR Console — style.css  v0.8.0
    Dark theme: #0a0a0a bg · #ffffff text · iCAS2 states · ATC scanner
    ═══════════════════════════════════════════════════════════════ */
 
@@ -250,8 +250,7 @@ body { display:flex; flex-direction:column; }
 .pill-tuned.on { background:rgba(0,170,170,0.35); }
 .pill-active { border-color:var(--green); background:rgba(0,255,136,0.2); }
 .pill-active.on { background:rgba(0,255,136,0.30); }
-.pill-mute   { border-color:var(--amber); background:rgba(255,136,0,0.2); }
-.pill-mute.on   { background:rgba(255,136,0,0.35); }
+/* pill-mute retired — audio status + mute button used instead */
 
 /* Row 2 — Step buttons */
 .atc-step-row {
@@ -321,21 +320,37 @@ body { display:flex; flex-direction:column; }
   width:44px; text-align:right; flex-shrink:0;
 }
 
-/* MUTE toggle button — selectable, stays lit while muted */
+/* MUTE toggle button — lives in pills row */
 .mute-toggle-btn {
-  font-family:var(--font-ui); font-size:9px; font-weight:700;
-  letter-spacing:.12em; padding:3px 8px;
+  font-family:var(--font-ui); font-size:8px; font-weight:700;
+  letter-spacing:.12em; padding:2px 6px;
   border-radius:2px; border:1px solid var(--border-sel);
   background:var(--bg-input); color:var(--txt-lo);
   cursor:pointer; transition:all var(--trans);
-  flex-shrink:0; margin-left:4px;
+  flex-shrink:0; line-height:1;
 }
 .mute-toggle-btn:hover { border-color:var(--amber); color:var(--txt-hi); background:var(--amber-dim); }
 .mute-toggle-btn.muted {
   border-color:var(--amber); color:var(--amber);
   background:rgba(255,136,0,0.28);
-  box-shadow:0 0 7px rgba(255,136,0,0.30);
+  box-shadow:0 0 6px rgba(255,136,0,0.28);
 }
+
+/* Audio stream status indicator */
+.audio-status {
+  display:flex; align-items:center; gap:3px;
+  font-family:var(--font-ui); font-size:8px; font-weight:700;
+  letter-spacing:.12em; color:var(--txt-dim);
+  flex-shrink:0; white-space:nowrap;
+  transition:color var(--trans);
+}
+.audio-status.live       { color:var(--green); }
+.audio-status.buffering  { color:var(--amber); }
+.audio-status.offline    { color:var(--txt-dim); }
+#audio-dot { font-size:9px; line-height:1; }
+.audio-status.live      #audio-dot { color:var(--green);  text-shadow:0 0 6px rgba(0,255,136,0.60); }
+.audio-status.buffering #audio-dot { color:var(--amber);  text-shadow:0 0 6px rgba(255,136,0,0.50); }
+.audio-status.offline   #audio-dot { color:var(--txt-dim); text-shadow:none; }
 
 /* Rows 4+5 — Memory buttons */
 .atc-mem-row {

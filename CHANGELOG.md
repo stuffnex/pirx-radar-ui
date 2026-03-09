@@ -13,6 +13,50 @@ _Changes staged but not yet tagged._
 
 ---
 
+## [0.8.0] — 2026-03-09
+
+### Added — Always-on audio receiver (Milestone 2)
+
+#### 7. Audio streaming engine (`app.js`)
+
+- **Added** `AUDIO_STREAM_URL(khz)` — builds `GET /audio/stream?freq=<MHz>` URL from `API_BASE`; works on both LAN and production Cloudflare Tunnel.
+- **Added** hidden `<audio id="atc-audio">` element — created at runtime, appended to `document.body`; single instance reused across all frequency changes.
+- **Added** `audioConnect(khz)` — tears down previous stream (`pause` + `removeAttribute('src')` + `load`), sets new `src`, calls `load()`. Event handlers: `oncanplay` → `play()`, `onplaying` → `setAudioStatus('live')`, `onwaiting`/`onstalled` → `setAudioStatus('buffering')`, `onerror` → retry logic.
+- **Added** `audioDisconnect()` — stops stream and resets status to `offline`.
+- **Added** `audioOnFreqChange()` — guard: no-op when `scanPhase === 1` (STBY dialling). Called by all freq-change paths.
+- **Added** `setAudioStatus(state)` — updates `#audio-status` class and `#audio-label` text; states: `live` / `buffering` / `offline`.
+- **Added** retry logic — up to `AUDIO_MAX_RETRIES` (3) attempts, `AUDIO_RETRY_MS` (3 000 ms) apart; resets on successful `onplaying`.
+- **Added** `audioOnFreqChange()` call in `initATCControls()` — starts stream for initial frequency on boot.
+
+#### Wired into all frequency-change paths
+
+- `tunePreset(key)` — fires `audioOnFreqChange()` after `freq` update.
+- `tuneUserSlot(key)` — fires `audioOnFreqChange()` after `freq` update.
+- `doTFR()` — fires `audioOnFreqChange()` immediately when stbyFreq transfers to freq.
+- `commitToDestination()` — fires `audioOnFreqChange()` after `scanPhase` returns to 0.
+- `resetPresetDefault(key)` — fires `audioOnFreqChange()` if active preset resets.
+
+#### Mute toggle updated
+
+- **Changed** `toggleMute()` — sets `audioEl.muted = isMuted`; updates button label to `UNMUTE` while muted, `MUTE` when active.
+- Stream stays connected while muted — unmuting resumes instantly.
+
+#### HTML changes (`index.html`)
+
+- **Added** `<span class="audio-status" id="audio-status">` with dot (`#audio-dot`) and label (`#audio-label`) — inline in `.atc-status-pills`.
+- **Moved** `#btn-mute` from row 3 (slider row) into `.atc-status-pills` row — sits right of audio status.
+- **Removed** duplicate mute button from slider row.
+- **Bumped** version to `v0.8.0`.
+
+#### CSS changes (`style.css`)
+
+- **Added** `.audio-status`, `.audio-status.live`, `.audio-status.buffering`, `.audio-status.offline` — dot colour and glow per state.
+- **Changed** `.mute-toggle-btn` — sized to match status pills row (8px font, `2px 6px` padding).
+- **Retired** `.pill-mute` / `.pill-mute.on` — replaced comment; `updateStatusPills()` no longer references `#pill-mute`.
+
+
+---
+
 ## [0.7.0] — 2026-03-06
 
 ### Changed — 6 production improvements across all three files

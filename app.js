@@ -1,6 +1,6 @@
 'use strict';
 // ═══════════════════════════════════════════════════════════════════════
-// PIRX Radar / SDR Console — app.js  v0.7.2
+// PIRX Radar / SDR Console — app.js  v0.8.0
 //
 //  1. Aircraft symbols: white squares, 25% of previous diamond size
 //  2. Top tag line: squawk display with V/code rules, no WARNINGS text
@@ -8,6 +8,7 @@
 //  4. EDDN/NUE coordinates displayed in selected track panel
 //  5. Live mode signal lifetime: 60s total, PLOC shown 30–60s (orange)
 //  6. Collapsible selected track panel with auto-open/close on select
+//  7. Always-on audio receiver — auto-stream on freq change, mute toggle
 // ═══════════════════════════════════════════════════════════════════════
 
 // ════════════════════════════════════════════════════════════════════════
@@ -396,7 +397,7 @@ let stbyFreq  = 119475;
 let pendingFreq = null;  // freq ready to be stored, set when TFR pressed
 
 let activeMemKey = 'APP';  // currently highlighted preset/slot
-let isMuted = false;
+let isMuted = true;   // default: muted — user must unmute
 
 // ═══════════════════════════════════════════════════════════════════════
 // GENERAL APP STATE
@@ -482,7 +483,7 @@ function updateTuneMarker() {
 function updateStatusPills() {
   document.getElementById('pill-tuned').classList.add('on');
   document.getElementById('pill-active').classList.toggle('on', !isMuted);
-  document.getElementById('pill-mute').classList.toggle('on', isMuted);
+  // pill-mute retired — mute state shown via btn-mute label + audio-status
 }
 
 function updateScanPhaseUI() {
@@ -523,6 +524,7 @@ function doTFR() {
   freq = stbyFreq;
   pendingFreq = freq;
   freqEl.textContent = (freq / 1000).toFixed(3);
+  audioOnFreqChange();
   scanPhase = 2;
   log('TFR → ' + (freq/1000).toFixed(3) + ' MHz — select destination (preset or 1–4)', 'ok');
   updateTuneMarker();
@@ -543,6 +545,7 @@ function commitToDestination(key, type) {
   }
   scanPhase = 0;
   pendingFreq = null;
+  audioOnFreqChange();
   updateScanPhaseUI();
   updateAllMemBtns();
   updateUserBtns();
@@ -556,6 +559,7 @@ function tunePreset(key) {
   activeMemKey = key;
   freqEl.textContent = (freq / 1000).toFixed(3);
   updateTuneMarker();
+  audioOnFreqChange();
   updateAllMemBtns();
   log(key + ' → ' + (freq/1000).toFixed(3) + ' MHz', 'info');
 }
@@ -567,6 +571,7 @@ function tuneUserSlot(key) {
   activeMemKey = key;
   freqEl.textContent = (freq / 1000).toFixed(3);
   updateTuneMarker();
+  audioOnFreqChange();
   updateAllMemBtns();
   updateUserBtns();
   log(key + ' → ' + (freq/1000).toFixed(3) + ' MHz', 'info');
@@ -580,6 +585,7 @@ function resetPresetDefault(key) {
     updateTuneMarker();
   }
   updateAllMemBtns();
+  audioOnFreqChange();
   flashMemBtn(key);
   log(key + ' reset → ' + (DEFAULT_MEMORY[key]/1000).toFixed(3) + ' MHz', 'info');
 }
@@ -643,8 +649,10 @@ function flashStepBtn(step, dir) {
 
 function toggleMute() {
   isMuted = !isMuted;
+  audioEl.muted = isMuted;
   const btn = document.getElementById('btn-mute');
   btn.classList.toggle('muted', isMuted);
+  btn.textContent = isMuted ? 'UNMUTE' : 'MUTE';
   updateStatusPills();
   log(isMuted ? 'Audio muted' : 'Audio unmuted', isMuted ? 'warn' : 'info');
 }
@@ -708,6 +716,130 @@ function initATCControls() {
   updateScanPhaseUI();
   freqEl.textContent = (freq / 1000).toFixed(3);
   document.getElementById('pill-tuned').classList.add('on');
+  // Reflect default muted state in button
+  const muteBtn = document.getElementById('btn-mute');
+  muteBtn.classList.add('muted');
+  muteBtn.textContent = 'UNMUTE';
+  // Start audio stream for initial frequency (muted)
+  audioOnFreqChange();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// 7. AUDIO RECEIVER ENGINE
+//
+//  Always-on: connects automatically whenever the active frequency changes.
+//  No play/stop buttons — behaves like a real ATC scanner.
+//
+//  Backend expects one of:
+//    HTTP chunked:  GET  /audio/stream?freq=119.475   → audio/mpeg stream
+//    WebSocket:     WS   /audio/ws?freq=119.475       → binary PCM / mp3 frames
+//
+//  This implementation uses an <audio> element with an HTTP stream src.
+//  The backend URL pattern is configurable via AUDIO_STREAM_URL() below.
+//
+//  Connection lifecycle:
+//    audioConnect(khz)   — tear down old stream, connect to new freq
+//    audioDisconnect()   — stop and release stream
+//    toggleMute()        — pause/resume without disconnecting
+//    setAudioStatus(s)   — update status dot ('live'|'buffering'|'offline')
+//
+//  Retry: up to AUDIO_MAX_RETRIES on error, with AUDIO_RETRY_MS backoff.
+// ═══════════════════════════════════════════════════════════════════════
+
+const AUDIO_MAX_RETRIES = 3;
+const AUDIO_RETRY_MS    = 3000;
+
+/** Build the audio stream URL for a given frequency in kHz */
+function AUDIO_STREAM_URL(khz) {
+  const mhz = (khz / 1000).toFixed(3);
+  return `${API_BASE}/audio/stream?freq=${mhz}`;
+}
+
+// Hidden <audio> element — created once, reused
+const audioEl = document.createElement('audio');
+audioEl.id = 'atc-audio';
+audioEl.preload = 'none';
+audioEl.style.display = 'none';
+document.body.appendChild(audioEl);
+
+let audioRetries  = 0;
+let audioRetryTid = null;
+let audioConnectedFreq = null;  // kHz currently streaming
+
+function setAudioStatus(state) {
+  // state: 'live' | 'buffering' | 'offline'
+  const el = document.getElementById('audio-status');
+  const lb = document.getElementById('audio-label');
+  if (!el || !lb) return;
+  el.className = 'audio-status ' + state;
+  lb.textContent = { live: 'LIVE', buffering: 'BUFFERING', offline: 'OFFLINE' }[state] || 'OFFLINE';
+}
+
+function audioConnect(khz) {
+  // Don't reconnect to same frequency unless recovering from error
+  if (audioConnectedFreq === khz && !audioEl.paused && !audioEl.error) return;
+
+  clearTimeout(audioRetryTid);
+  audioEl.pause();
+  audioEl.removeAttribute('src');
+  audioEl.load();
+  audioConnectedFreq = khz;
+
+  setAudioStatus('buffering');
+  log('Audio → ' + (khz/1000).toFixed(3) + ' MHz', 'info');
+
+  audioEl.src = AUDIO_STREAM_URL(khz);
+  audioEl.muted = isMuted;
+
+  // Remove old listeners before adding new ones
+  audioEl.oncanplay  = null;
+  audioEl.onerror    = null;
+  audioEl.onwaiting  = null;
+  audioEl.onplaying  = null;
+  audioEl.onstalled  = null;
+
+  audioEl.oncanplay = () => {
+    audioRetries = 0;
+    audioEl.play().catch(() => {});  // autoplay may require user gesture on some browsers
+  };
+  audioEl.onplaying = () => {
+    setAudioStatus('live');
+    audioRetries = 0;
+  };
+  audioEl.onwaiting = audioEl.onstalled = () => {
+    setAudioStatus('buffering');
+  };
+  audioEl.onerror = () => {
+    setAudioStatus('offline');
+    audioRetries++;
+    if (audioRetries <= AUDIO_MAX_RETRIES) {
+      log('Audio error — retry ' + audioRetries + '/' + AUDIO_MAX_RETRIES, 'warn');
+      audioRetryTid = setTimeout(() => audioConnect(audioConnectedFreq), AUDIO_RETRY_MS);
+    } else {
+      log('Audio offline — ' + (khz/1000).toFixed(3) + ' MHz', 'error');
+      audioRetries = 0;
+    }
+  };
+
+  audioEl.load();
+}
+
+function audioDisconnect() {
+  clearTimeout(audioRetryTid);
+  audioEl.pause();
+  audioEl.removeAttribute('src');
+  audioEl.load();
+  audioConnectedFreq = null;
+  setAudioStatus('offline');
+}
+
+/**
+ * Called whenever the active frequency changes.
+ * Audio stays on active freq — STBY dialling does NOT switch audio.
+ */
+function audioOnFreqChange() {
+  if (scanPhase === 1) return;  // dialling standby: audio stays on active freq
+  audioConnect(freq);
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1285,10 +1417,11 @@ function log(msg, type='info') {
 // BOOT
 // ═══════════════════════════════════════════════════════════════════════
 
-log('PIRX v0.7.2 — EDDN/NUE Nuremberg', 'ok');
+log('PIRX v0.8.0 — EDDN/NUE Nuremberg · audio receiver', 'ok');
 log('WS → ' + WS_URL, 'info');
 log('Tags: V=VFR(green) code=IFR(blue) code=EMRG(red) PLOC=aging(orange)', 'info');
 log('STBY to unlock presets + waterfall tuning', 'info');
+log('Audio: auto-stream on freq change · MUTE to silence', 'info');
 
 initATCControls();
 connectWebSocket();

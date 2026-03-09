@@ -13,7 +13,7 @@
 <header id="topbar">
   <div id="tl">
     <span id="logo-mark">⬡</span>
-    <span id="app-title">PIRX <span class="title-dim">Radar / SDR Console</span> <span class="title-ver">v0.7.2</span></span>
+    <span id="app-title">PIRX <span class="title-dim">Radar / SDR Console</span> <span class="title-ver">v0.8.0</span></span>
   </div>
   <div id="tc">
     <div id="conn-badge" class="badge badge-mock">
@@ -65,7 +65,8 @@
         <div class="atc-status-pills">
           <span class="status-pill pill-tuned"  id="pill-tuned">TUNED</span>
           <span class="status-pill pill-active" id="pill-active">ACTIVE</span>
-          <span class="status-pill pill-mute"   id="pill-mute">MUTE</span>
+          <span class="audio-status" id="audio-status" title="Audio stream status"><span id="audio-dot">●</span> <span id="audio-label">OFFLINE</span></span>
+          <button class="mute-toggle-btn" id="btn-mute" title="Toggle audio mute">MUTE</button>
         </div>
       </div>
 
@@ -88,7 +89,7 @@
         <span class="slider-lbl" style="margin-left:6px">SQL</span>
         <input type="range" class="sdr-slider" id="sql-slider" min="-80" max="0" value="-40" step="1">
         <span class="slider-val" id="sql-val">−40 dB</span>
-        <button class="mute-toggle-btn" id="btn-mute" title="Toggle audio mute">MUTE</button>
+
       </div>
 
       <!-- Row 4: 6 protected ATC preset buttons -->
