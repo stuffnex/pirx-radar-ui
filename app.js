@@ -749,10 +749,11 @@ function initATCControls() {
 const AUDIO_MAX_RETRIES = 3;
 const AUDIO_RETRY_MS    = 3000;
 
-/** Build the audio stream URL for a given frequency in kHz */
+/** Build the audio stream URL for a given frequency in kHz
+ *  Backend expects integer kHz: /audio/stream?freq=119475
+ */
 function AUDIO_STREAM_URL(khz) {
-  const mhz = (khz / 1000).toFixed(3);
-  return `${API_BASE}/audio/stream?freq=${mhz}`;
+  return `${API_BASE}/audio/stream?freq=${Math.round(khz)}`;
 }
 
 // Hidden <audio> element — created once, reused
