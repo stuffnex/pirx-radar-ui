@@ -1003,15 +1003,24 @@ async function pollHealth() {
 }
 
 // ── 5. Live mode track handling with signal lifetime ───────────────────
+//
+//  Field normalisation — backend name → frontend name:
+//    vertical_rate  → _vr      (Beast DF17/18 velocity messages)
+//    last_seen      → ignored  (frontend tracks _lastSeen itself)
+//
 function handleTracksMsg(arr) {
   const now = Date.now() / 1000;
   const live = new Set();
   arr.forEach(t => {
     live.add(t.icao);
+
+    // Normalise backend field names to what the renderer expects
+    if (t.vertical_rate !== undefined && t._vr === undefined) t._vr = t.vertical_rate;
+
     const ex = tracks.get(t.icao) || {};
-    if (!ex._state)    t._state    = assignState(t.icao);
+    if (!ex._state)     t._state    = assignState(t.icao);
     if (!ex._firstSeen) t._firstSeen = now;
-    else t._firstSeen = ex._firstSeen;
+    else                t._firstSeen = ex._firstSeen;
     t._lastSeen = now;
     const age = now - t._firstSeen;
     t._ploc = age >= SIGNAL_PLOC_AGE;   // show PLOC badge if >30s
