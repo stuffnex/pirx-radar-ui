@@ -81,17 +81,14 @@
         <button class="step-btn pos" id="b-p25"  data-step="25"   data-dir="1">+25</button>
       </div>
 
-      <!-- Row 3: Volume (short) + Squelch (shorter) + Gain + MUTE in pills row -->
+      <!-- Row 3: VOL · SQL · GAIN — labels show live value -->
       <div class="atc-slider-row">
-        <span class="slider-lbl">VOL</span>
+        <span class="slider-lbl">VOL<br><span class="slider-live" id="vol-val">−10</span></span>
         <input type="range" class="sdr-slider vol-slider" id="vol-slider" min="-60" max="0" value="-10" step="1">
-        <span class="slider-val" id="vol-val">−10 dB</span>
-        <span class="slider-lbl">SQL</span>
+        <span class="slider-lbl">SQL<br><span class="slider-live" id="sql-val">−40</span></span>
         <input type="range" class="sdr-slider sql-slider" id="sql-slider" min="-80" max="0" value="-40" step="1">
-        <span class="slider-val" id="sql-val">−40 dB</span>
-        <span class="slider-lbl">GAIN</span>
+        <span class="slider-lbl">GAIN<br><span class="slider-live" id="gain-val">40</span></span>
         <input type="range" class="sdr-slider gain-slider" id="gain-slider" min="0" max="50" value="40" step="1">
-        <span class="slider-val" id="gain-val">40</span>
       </div>
 
       <!-- Row 4: 6 protected ATC preset buttons -->

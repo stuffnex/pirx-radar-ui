@@ -210,9 +210,10 @@ body { display:flex; flex-direction:column; }
 /* ════════════════════════════════════════
    ATC SCANNER SECTION
    ════════════════════════════════════════ */
-#sdr-section { width:370px; }
+#sdr-section { width:420px; }
 
 #sdr-body {
+  overflow:hidden;
   padding:6px 10px 5px;
   display:flex; flex-direction:column; gap:5px;
   overflow:hidden; flex:1;
@@ -298,11 +299,13 @@ body { display:flex; flex-direction:column; }
 
 /* Row 3 — Sliders: VOL=90%, SQL=40%, GAIN=fills remainder */
 .atc-slider-row {
-  display:flex; align-items:center; gap:4px;
+  display:flex; align-items:center; gap:3px;
+  overflow:hidden; width:100%; box-sizing:border-box;
 }
 .slider-lbl {
   font-family:var(--font-ui); font-size:9px; font-weight:700;
   letter-spacing:.12em; color:var(--txt-lo); flex-shrink:0;
+  text-align:center; line-height:1.2;
 }
 .sdr-slider {
   flex:1; -webkit-appearance:none;
@@ -310,20 +313,24 @@ body { display:flex; flex-direction:column; }
   border-radius:2px; outline:none; cursor:pointer;
 }
 /* VOL 10% shorter than default */
-.vol-slider  { flex:0.9; }
-/* SQL 60% shorter than default */
-.sql-slider  { flex:0.4; }
-/* GAIN takes the freed space */
-.gain-slider { flex:1.2; }
+/* Slider proportions: VOL=0.81  SQL=GAIN=0.52 (equal)
+   All sliders constrained within the ATC scanner panel */
+.vol-slider  { flex:0.81; min-width:0; max-width:100%; }
+.sql-slider  { flex:0.52; min-width:0; max-width:100%; }
+.gain-slider { flex:0.52; min-width:0; max-width:100%; }
 .sdr-slider::-webkit-slider-thumb {
   -webkit-appearance:none; width:11px; height:11px;
   background:var(--cyan); border-radius:50%;
   cursor:pointer; box-shadow:0 0 5px var(--cyan-glow);
 }
-.slider-val {
-  font-size:9px; color:var(--txt-hi); font-weight:700;
-  font-family:'Courier New',monospace;
-  width:44px; text-align:right; flex-shrink:0;
+.slider-val { display:none; }   /* retired — value now shown in label */
+.slider-live {
+  display:block; font-size:8px; color:var(--cyan);
+  font-family:'Courier New',monospace; font-weight:700;
+  letter-spacing:0; line-height:1; text-align:center;
+}
+.slider-lbl {
+  text-align:center; line-height:1.1;
 }
 
 /* MUTE toggle button — lives in pills row */

@@ -451,7 +451,9 @@ function setRightPanel(open) {
   rpCollapsed = !open;
   rightPanel.classList.toggle('collapsed', rpCollapsed);
   rpToggle.textContent = rpCollapsed ? '\u2039' : '\u203a';
-  setTimeout(resize, 200);
+  // Use resizeCanvases (not resize) so waterfall history is preserved
+  // Aircraft selection and deselection must not interfere with FFT/Waterfall
+  setTimeout(resizeCanvases, 200);
 }
 rpToggle.addEventListener('click', () => setRightPanel(rpCollapsed));
 
@@ -682,82 +684,6 @@ function toggleMute() {
   }
 }
 
-function initATCControls() {
-  // Step buttons
-  document.querySelectorAll('.step-btn').forEach(btn => {
-    btn.addEventListener('click', () =>
-      directStep(parseFloat(btn.dataset.step) * parseInt(btn.dataset.dir))
-    );
-  });
-
-  document.getElementById('btn-mute').addEventListener('click', toggleMute);
-  document.getElementById('btn-stby').addEventListener('click', doStby);
-  document.getElementById('btn-tfr').addEventListener('click', doTFR);
-
-  // Preset buttons (APP/TWR/GND/DEL/CTR/ATIS)
-  document.querySelectorAll('.mem-btn[data-type="preset"]').forEach(btn => {
-    const key = btn.dataset.key;
-    let pt = null;
-    btn.addEventListener('click', () => {
-      if (commitToDestination(key, 'preset')) return;  // phase 2 → store
-      tunePreset(key);                                  // phase 0 → tune
-    });
-    // 2s long-press = reset to default
-    btn.addEventListener('mousedown', () => {
-      pt = setTimeout(() => { pt = null; resetPresetDefault(key); }, 2000);
-    });
-    btn.addEventListener('mouseup',    () => { if (pt) { clearTimeout(pt); pt = null; } });
-    btn.addEventListener('mouseleave', () => { if (pt) { clearTimeout(pt); pt = null; } });
-  });
-
-  // User slot buttons (1–4)
-  document.querySelectorAll('.mem-btn[data-type="user"]').forEach(btn => {
-    const key = btn.dataset.key;
-    let pt = null;
-    btn.addEventListener('click', () => {
-      if (commitToDestination(key, 'user')) return;  // phase 2 → store
-      tuneUserSlot(key);                              // phase 0 → tune
-    });
-    // 2s long-press = erase slot
-    btn.addEventListener('mousedown', () => {
-      pt = setTimeout(() => { pt = null; eraseUserSlot(key); }, 2000);
-    });
-    btn.addEventListener('mouseup',    () => { if (pt) { clearTimeout(pt); pt = null; } });
-    btn.addEventListener('mouseleave', () => { if (pt) { clearTimeout(pt); pt = null; } });
-  });
-
-  // Sliders
-  document.getElementById('vol-slider').addEventListener('input', function() {
-    document.getElementById('vol-val').textContent = (+this.value >= 0 ? '+' : '') + this.value + ' dB';
-  });
-  document.getElementById('sql-slider').addEventListener('input', function() {
-    document.getElementById('sql-val').textContent = (+this.value >= 0 ? '+' : '') + this.value + ' dB';
-  });
-  // Gain slider — updates rtlGain and reconnects audio stream with new gain
-  document.getElementById('gain-slider').addEventListener('input', function() {
-    rtlGain = parseInt(this.value, 10);
-    document.getElementById('gain-val').textContent = rtlGain;
-    // Reconnect stream with new gain — reset audioConnectedFreq to force reconnect
-    audioConnectedFreq = null;
-    audioOnFreqChange();
-    log('Gain → ' + rtlGain + ' dB', 'info');
-  });
-
-  updateAllMemBtns();
-  updateUserBtns();
-  updateStatusPills();
-  updateTuneMarker();
-  updateScanPhaseUI();
-  freqEl.textContent = (freq / 1000).toFixed(3);
-  document.getElementById('pill-tuned').classList.add('on');
-  // Reflect default muted state in button
-  const muteBtn = document.getElementById('btn-mute');
-  muteBtn.classList.add('muted');
-  muteBtn.textContent = 'UNMUTE';
-  // Start audio stream for initial frequency (muted)
-  audioOnFreqChange();
-}
-
 // ═══════════════════════════════════════════════════════════════════════
 // 7. AUDIO RECEIVER ENGINE
 //
@@ -879,6 +805,84 @@ function audioOnFreqChange() {
   if (scanPhase === 1) return;  // dialling standby: audio stays on active freq
   audioConnect(freq);
 }
+
+
+function initATCControls() {
+  // Step buttons
+  document.querySelectorAll('.step-btn').forEach(btn => {
+    btn.addEventListener('click', () =>
+      directStep(parseFloat(btn.dataset.step) * parseInt(btn.dataset.dir))
+    );
+  });
+
+  document.getElementById('btn-mute').addEventListener('click', toggleMute);
+  document.getElementById('btn-stby').addEventListener('click', doStby);
+  document.getElementById('btn-tfr').addEventListener('click', doTFR);
+
+  // Preset buttons (APP/TWR/GND/DEL/CTR/ATIS)
+  document.querySelectorAll('.mem-btn[data-type="preset"]').forEach(btn => {
+    const key = btn.dataset.key;
+    let pt = null;
+    btn.addEventListener('click', () => {
+      if (commitToDestination(key, 'preset')) return;  // phase 2 → store
+      tunePreset(key);                                  // phase 0 → tune
+    });
+    // 2s long-press = reset to default
+    btn.addEventListener('mousedown', () => {
+      pt = setTimeout(() => { pt = null; resetPresetDefault(key); }, 2000);
+    });
+    btn.addEventListener('mouseup',    () => { if (pt) { clearTimeout(pt); pt = null; } });
+    btn.addEventListener('mouseleave', () => { if (pt) { clearTimeout(pt); pt = null; } });
+  });
+
+  // User slot buttons (1–4)
+  document.querySelectorAll('.mem-btn[data-type="user"]').forEach(btn => {
+    const key = btn.dataset.key;
+    let pt = null;
+    btn.addEventListener('click', () => {
+      if (commitToDestination(key, 'user')) return;  // phase 2 → store
+      tuneUserSlot(key);                              // phase 0 → tune
+    });
+    // 2s long-press = erase slot
+    btn.addEventListener('mousedown', () => {
+      pt = setTimeout(() => { pt = null; eraseUserSlot(key); }, 2000);
+    });
+    btn.addEventListener('mouseup',    () => { if (pt) { clearTimeout(pt); pt = null; } });
+    btn.addEventListener('mouseleave', () => { if (pt) { clearTimeout(pt); pt = null; } });
+  });
+
+  // Sliders
+  document.getElementById('vol-slider').addEventListener('input', function() {
+    document.getElementById('vol-val').textContent = this.value;
+  });
+  document.getElementById('sql-slider').addEventListener('input', function() {
+    document.getElementById('sql-val').textContent = this.value;
+  });
+  // Gain slider — updates rtlGain and reconnects audio stream with new gain
+  document.getElementById('gain-slider').addEventListener('input', function() {
+    rtlGain = parseInt(this.value, 10);
+    document.getElementById('gain-val').textContent = rtlGain;
+    // Reconnect stream with new gain — reset audioConnectedFreq to force reconnect
+    audioConnectedFreq = null;
+    audioOnFreqChange();
+    log('Gain → ' + rtlGain + ' dB', 'info');
+  });
+
+  updateAllMemBtns();
+  updateUserBtns();
+  updateStatusPills();
+  updateTuneMarker();
+  updateScanPhaseUI();
+  freqEl.textContent = (freq / 1000).toFixed(3);
+  document.getElementById('pill-tuned').classList.add('on');
+  // Reflect default muted state in button
+  const muteBtn = document.getElementById('btn-mute');
+  muteBtn.classList.add('muted');
+  muteBtn.textContent = 'UNMUTE';
+  // Start audio stream for initial frequency (muted)
+  audioOnFreqChange();
+}
+
 
 // ═══════════════════════════════════════════════════════════════════════
 // WATERFALL — live FFT from backend, fallback to mock if unavailable
@@ -1234,7 +1238,10 @@ function c2ll(x, y) {
 // CANVAS RESIZE
 // ═══════════════════════════════════════════════════════════════════════
 
-function resize() {
+// resizeCanvases — resize canvas pixel dimensions only.
+// Does NOT clear wfHistory — safe to call on panel toggle.
+// The waterfall scroll is preserved across panel open/close.
+function resizeCanvases() {
   const rw = document.getElementById('radar-wrap'), dpr = window.devicePixelRatio || 1;
   canvas.width  = rw.clientWidth  * dpr; canvas.height = rw.clientHeight * dpr;
   canvas.style.width  = rw.clientWidth  + 'px'; canvas.style.height = rw.clientHeight + 'px';
@@ -1242,8 +1249,15 @@ function resize() {
   const wh = Math.max(1, wb.clientHeight - 14);
   wfCanvas.width  = wb.clientWidth  * dpr; wfCanvas.height = wh * dpr;
   wfCanvas.style.width  = wb.clientWidth  + 'px'; wfCanvas.style.height = wh + 'px';
-  wfHistory = [];
 }
+
+// resize — full resize including waterfall history clear.
+// Only called on actual window resize, not on panel toggle.
+function resize() {
+  resizeCanvases();
+  wfHistory = [];   // clear scroll history on true window resize
+}
+
 window.addEventListener('resize', resize);
 resize();
 
