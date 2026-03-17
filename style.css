@@ -296,9 +296,9 @@ body { display:flex; flex-direction:column; }
 .step-btn.flash-neg { background:rgba(255,68,68,0.55) !important; border-color:#ff4444 !important; }
 .step-btn.flash-pos { background:rgba(0,255,136,0.50) !important; border-color:#00ff88 !important; }
 
-/* Row 3 — Sliders + Mute */
+/* Row 3 — Sliders: VOL=90%, SQL=40%, GAIN=fills remainder */
 .atc-slider-row {
-  display:flex; align-items:center; gap:5px;
+  display:flex; align-items:center; gap:4px;
 }
 .slider-lbl {
   font-family:var(--font-ui); font-size:9px; font-weight:700;
@@ -309,6 +309,12 @@ body { display:flex; flex-direction:column; }
   height:3px; background:var(--border-hi);
   border-radius:2px; outline:none; cursor:pointer;
 }
+/* VOL 10% shorter than default */
+.vol-slider  { flex:0.9; }
+/* SQL 60% shorter than default */
+.sql-slider  { flex:0.4; }
+/* GAIN takes the freed space */
+.gain-slider { flex:1.2; }
 .sdr-slider::-webkit-slider-thumb {
   -webkit-appearance:none; width:11px; height:11px;
   background:var(--cyan); border-radius:50%;

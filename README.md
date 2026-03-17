@@ -1,316 +1,412 @@
 # PIRX — Radar / SDR Console
 
-A browser-based ATC radar display and VHF communications scanner.
-Zero dependencies, zero build step — three static files, any host.
+**Version:** 0.9.0  
+**Platform:** Raspberry Pi 4 (tested) · Any Linux with Node.js 18+  
+**Stack:** Vanilla JS + Canvas · Node.js + Express + ws (no build step)
 
-**Version:** 0.8.0 · **Reference:** EDDN/NUE Nuremberg · See [CHANGELOG.md](CHANGELOG.md)
+```
+⬡ PIRX  Radar / SDR Console  v0.9.0
+┌──────────────────────────────────────────────────────────────┐
+│  Canvas radar (iCAS2-style)    │  Selected track panel       │
+│  White square aircraft symbols │  ICAO / callsign / FL / GS  │
+│  Drag tags · zoom · pan        │  REF dist/bearing to EDDN   │
+├──────────────────────────────────────────────────────────────┤
+│  ATC Scanner  │  FFT/Waterfall (live or mock)  │  System Log │
+└──────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## Layout
+## Table of Contents
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ⬡ PIRX  Radar / SDR Console    ● MOCK   11 TRACKS  EDDN/NUE  40NM  │
-├─────────────────────────────────────┬─┬──────────────────────────────┤
-│                                     │›│  ⊕ Selected Track           │
-│   Canvas radar                      │ │  ICAO  3C1A3F               │
-│   equirectangular projection        │ │  CALL  DLH123               │
-│   range rings · sector lines        │ │  REF   EDDN/NUE             │
-│   velocity leaders                  │ │  DIST  12.4 NM              │
-│                                     │ │  BRG   247°                 │
-│   iCAS2 transparent labels:         │ │  LAT   49.4100°N            │
-│   V   DLH123  NUE                   │ │  LON   011.1200°E           │
-│   FL340↓-08   FL360                 │ │  PLOC  NO                   │
-│   GS452                             │ │                             │
-│   [■ white square symbols]          │ │  [‹ collapses panel]        │
-├──────────────────┬──────────────────┴─┴──────────┬──────────────────┤
-│ ATC Scanner      │ 118──120──122──124──126──128   │ System Log       │
-│ 119.475 STBY TFR │ [FFT spectrum][waterfall]      │ 12:34:01Z …      │
-│ APP TWR GND DEL  │ STBY mode → click to tune      │                  │
-│ CTR ATIS         │                                │                  │
-└──────────────────┴────────────────────────────────┴──────────────────┘
-```
-
-The `›` / `‹` pad on the border toggles the right panel. Aircraft auto-open it on selection and auto-close it on deselect.
+1. [Hardware requirements](#1-hardware-requirements)
+2. [Raspberry Pi initial setup](#2-raspberry-pi-initial-setup)
+3. [RTL-SDR dongle configuration](#3-rtl-sdr-dongle-configuration)
+4. [Backend installation](#4-backend-installation)
+5. [Frontend deployment](#5-frontend-deployment)
+6. [Cloudflare Tunnel](#6-cloudflare-tunnel-remote-access)
+7. [ATC Scanner usage](#7-atc-scanner-usage)
+8. [Real-time audio receiver](#8-real-time-audio-receiver)
+9. [FFT / Waterfall](#9-fft--waterfall)
+10. [Configuration reference](#10-configuration-reference)
+11. [Troubleshooting](#11-troubleshooting)
+12. [Milestone roadmap](#12-milestone-roadmap)
 
 ---
 
-## Features
+## 1. Hardware requirements
 
-### 1. Aircraft Symbols
+| Item | Notes |
+|---|---|
+| Raspberry Pi 4 (2 GB+) | Pi 3B+ also works, slightly more CPU load |
+| MicroSD 16 GB+ (class 10) | Raspberry Pi OS Lite 64-bit recommended |
+| RTL-SDR dongle #1 | ADS-B reception at 1090 MHz |
+| RTL-SDR dongle #2 | VHF audio reception 118–137 MHz |
+| 1090 MHz antenna | Dedicated ADS-B antenna |
+| VHF antenna | Quarter-wave whip or discone 118–137 MHz |
+| Powered USB hub (optional) | Recommended for two dongles on Pi USB |
 
-- **White squares** — pure `#ffffff` fill, no stroke, no heading rotation
-- Normal: 3×3 px device-pixel square; Selected: 5×5 px
-- Selection glow and velocity leader unchanged
+> **One dongle cannot do two things simultaneously.**
+> The RTL2832U has a single tuner — one frequency at a time.
+> You need two separate dongles: one locked to 1090 MHz for ADS-B,
+> one free to tune VHF airband for audio.
 
-### 2. iCAS2 Tag System — top line squawk rules
+---
 
-Labels are rendered with no background. Top line (row 1) shows **only** the squawk token:
+## 2. Raspberry Pi initial setup
 
-| Squawk | Display | Colour |
-|---|---|---|
-| 7000 | `V` | `#00ff88` green |
-| 7500 / 7600 / 7700 | code e.g. `7500` | `#ff4444` red |
-| all others | code e.g. `2000` | `#66ccff` light blue |
+```bash
+# Update system
+sudo apt update && sudo apt upgrade -y
 
-No `WARNINGS` text. No hex ICAO on the tag. Secondary fields (CFL, COP, ASP…) render at 35% opacity of track colour.
+# Install required packages
+sudo apt install -y nodejs npm rtl-sdr ffmpeg git curl
 
-**PLOC indicator** (live mode, signal age 30–60 s): orange `PLOC` token appended to row 1.
+# Verify Node.js version (need 18+)
+node --version
 
-**Tagged format:**
-```
-V   DLH123  NUE
-FL340↓-08   FL360
-GS452
-```
+# Blacklist DVB kernel module — prevents kernel from claiming RTL dongles
+echo 'blacklist dvb_usb_rtl28xxu' | sudo tee /etc/modprobe.d/rtl-sdr.conf
+sudo rmmod dvb_usb_rtl28xxu 2>/dev/null || true
 
-**Detailed format (selected):**
-```
-V   PLOC
-DLH123  NUE  A320  H  +
-FL340↓-08  +800  FL360  WST
-GS452  480  270  FL380  FRA  FL320
-DIAS  DMACH  DHDG  TRACK
-```
-
-### 3. ATC Frequency Scanner — STBY/TFR workflow
-
-```
-STBY  TFR
-[119.475 MHz]   TUNED ACTIVE MUTE NORM
+# Verify both dongles are visible
+rtl_test -t 2>&1 | grep -E 'Found|SN:'
+# Expected:
+#   Found 2 device(s):
+#     0:  Nooelec, NESDR Nano 3, SN: stx:978:0   ← audio dongle
+#     1:  Nooelec, NESDR Nano 3, SN: AIS          ← ADS-B dongle
 ```
 
-**Workflow:**
-1. Click **STBY** → button highlights yellow, presets unlock, waterfall click-to-tune activates
-2. Dial frequency using step buttons or click waterfall
-3. Click **TFR** → STBY frequency transfers to active display; TFR highlights yellow; STBY stays lit
-4. Click a **preset** (while in STBY) → memorises current STBY frequency into that slot
+---
 
-**Preset protection:**
-- Presets are **read-only** unless STBY is active
-- **2-second long-press** on any preset → resets it to the factory EDDN default
-- Waterfall click-to-tune is **disabled** unless STBY is active (cursor shows `not-allowed`)
+## 3. RTL-SDR dongle configuration
 
-**Factory EDDN/NUE defaults:**
+### Identify which dongle is which
+
+```bash
+# Stop any services that hold dongles
+sudo systemctl stop fr24feed 2>/dev/null
+
+# List all dongles with serial numbers
+rtl_test -t 2>&1 | grep -E 'Found|SN:|device'
+
+# Test each dongle — note which opens for ADS-B vs audio
+rtl_fm -d 0 -f 1090000000 -s 2000000 - 2>&1 | head -3
+rtl_fm -d 1 -f 1090000000 -s 2000000 - 2>&1 | head -3
+```
+
+### Set permanent serial numbers (recommended)
+
+```bash
+# Assign SN to ADS-B dongle
+rtl_eeprom -d 0 -s ADS-B
+# Assign SN to audio dongle
+rtl_eeprom -d 1 -s AUDIO
+# Reboot to apply
+sudo reboot
+```
+
+After reboot you can address dongles by serial:
+- `rtl_fm -d AUDIO ...` — audio dongle
+- Beast/fr24feed configured with the ADS-B dongle index
+
+---
+
+## 4. Backend installation
+
+```bash
+# Clone repository
+git clone https://github.com/youruser/pirx.git ~/PIRX
+cd ~/PIRX
+
+# Install Node.js dependencies
+npm install
+
+# Configure environment
+cp .env.example .env
+nano .env
+```
+
+### Environment variables (`.env`)
+
+```bash
+# ── Network ──────────────────────────────────────────────────
+HTTP_PORT=8080          # Port the backend listens on
+BEAST_HOST=127.0.0.1   # Beast TCP host
+BEAST_PORT=30005        # Beast output port (binary Beast format)
+
+# ── RTL-SDR ──────────────────────────────────────────────────
+AUDIO_SOURCE=rtl_fm     # 'rtl_fm' | 'alsa' | 'mock'
+RTL_DEVICE=1            # Device index for audio dongle
+                        # Check with: rtl_test -t 2>&1 | grep SN
+RTL_GAIN=40             # Tuner gain 0-50 dB
+
+# ── Behaviour ────────────────────────────────────────────────
+BROADCAST_HZ=2          # WebSocket track broadcast rate (Hz)
+TRACK_TIMEOUT=60000     # Remove track after N ms without update
+AUDIO_IDLE_TTL=5000     # Stop audio process after N ms idle
+MOCK_ON_FAILURE=true    # Serve mock tracks if Beast disconnects
+```
+
+### Start with PM2
+
+```bash
+sudo npm install -g pm2
+pm2 start server.js --name pirx-backend
+pm2 save
+pm2 startup   # follow printed instructions for auto-start on reboot
+```
+
+### Verify backend
+
+```bash
+pm2 logs pirx-backend --lines 20
+curl http://localhost:8080/health
+curl http://localhost:8080/status
+curl http://localhost:8080/audio/freqs
+
+# Test audio stream (Ctrl+C after 3s — should print ID3 header)
+curl -s --max-time 5 "http://localhost:8080/audio/stream?freq=119475" | \
+  od -A x -t x1z | head -3
+```
+
+---
+
+## 5. Frontend deployment
+
+```bash
+# Copy frontend files to the static directory the backend serves
+cp app.js index.html style.css ~/PIRX/pirx-radar-ui/
+pm2 restart pirx-backend
+
+# Local access:      http://<pi-ip>:8080
+# Cloudflare access: https://your-tunnel-hostname
+```
+
+### Configure production hostname in `app.js`
+
+```js
+// Near the top of app.js — find PRODUCTION_HOSTS:
+const PRODUCTION_HOSTS = [
+  'pirx.dustyhut.org',   // ← replace with your hostname
+];
+```
+
+---
+
+## 6. Cloudflare Tunnel (remote access)
+
+```bash
+# Install cloudflared (ARM64 for Pi 4)
+wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
+sudo mv cloudflared-linux-arm64 /usr/local/bin/cloudflared
+sudo chmod +x /usr/local/bin/cloudflared
+
+# Authenticate (do this on a desktop, copy cert.pem to Pi)
+cloudflared tunnel login
+
+# Create tunnel
+cloudflared tunnel create pirx
+
+# ~/.cloudflared/config.yml
+cat > ~/.cloudflared/config.yml << 'YAML'
+tunnel: <your-tunnel-uuid>
+credentials-file: /home/pi/.cloudflared/<uuid>.json
+ingress:
+  - hostname: pirx.yourdomain.com
+    service: http://localhost:8080
+  - service: http_status:404
+YAML
+
+# Add DNS record
+cloudflared tunnel route dns pirx pirx.yourdomain.com
+
+# Run as PM2 service
+pm2 start "cloudflared tunnel run pirx" --name pirx-tunnel
+pm2 save
+```
+
+Cloudflare passes `audio/mpeg` chunked streams through as `DYNAMIC` — no
+special configuration needed for audio streaming.
+
+---
+
+## 7. ATC Scanner usage
+
+### Frequency presets (APP / TWR / GND / DEL / CTR / ATIS)
+
+- **Click** — tune active frequency to this preset
+- **Long press (2s)** — reset to EDDN/NUE factory default
 
 | Preset | MHz | Service |
 |---|---|---|
-| APP | 119.475 | EDDN Approach |
-| TWR | 118.305 | EDDN Tower |
-| GND | 121.760 | EDDN Ground |
-| DEL | 121.760 | EDDN Delivery |
-| CTR | 129.525 | Langen Radar |
-| ATIS | 123.080 | EDDN ATIS |
+| APP | 119.475 | Nuremberg Approach |
+| TWR | 118.305 | Nuremberg Tower |
+| GND | 121.760 | Nuremberg Ground |
+| DEL | 121.760 | Delivery |
+| CTR | 129.525 | Munich Radar |
+| ATIS | 123.080 | Nuremberg ATIS |
 
-### 4. EDDN/NUE Coordinates in Selected Track Panel
+### User slots 1–4
 
-The selected track panel now shows position relative to the EDDN/NUE reference point:
+- **Click** — tune to stored frequency (if not empty)
+- **Long press (2s)** — erase slot (flashes red)
 
-| Field | Description |
-|---|---|
-| REF | Reference airport: `EDDN/NUE` |
-| DIST | Great-circle distance in NM |
-| BRG | Magnetic bearing from EDDN/NUE |
-| LAT / LON | Absolute coordinates with N/S/E/W suffix |
+### STBY / TFR workflow
 
-### 5. Live Mode Signal Lifetime
+```
+1. Press STBY      → STBY highlights cyan
+                     Step buttons + waterfall dial STANDBY frequency
+                     Active audio stays on current frequency
 
-Applies only when connected to a live backend (not mock):
+2. Dial frequency  → use ±25 / ±8.33 / ±5 kHz buttons
+                     or click on the FFT/Waterfall
 
-| Age | Display |
-|---|---|
-| 0 – 30 s | Normal squawk colour |
-| 30 – 60 s | Orange `PLOC` appended to row 1; squawk keeps its colour |
-| > 60 s | Track removed from display |
+3. Press TFR       → Standby frequency becomes active
+                     Audio switches to new frequency
+                     Scanner waits for destination
 
-### 6. Collapsible Selected Track Panel
+4. Press preset or slot 1–4
+                   → Frequency stored in that button
+                     STBY and TFR both turn off
+                     Destination button highlights as active
 
-- `›` / `‹` toggle pad sits on the vertical border between radar and right panel
-- **Auto-opens** when an aircraft is selected
-- **Auto-collapses** when aircraft is deselected
-- CSS `width` transition (180 ms) — smooth, no layout jump
-- Canvas resizes automatically after collapse/expand
+Press STBY again at any time to cancel.
+```
+
+### Sliders
+
+| Slider | Range | Effect |
+|---|---|---|
+| VOL | −60 to 0 dB | Software output volume |
+| SQL | −80 to 0 dB | Squelch threshold |
+| GAIN | 0 to 50 dB | RTL-SDR tuner gain — reconnects stream on change |
 
 ---
 
-## File Structure
+## 8. Real-time audio receiver (auto-streaming)
 
 ```
-pirx-radar-ui/
-├── index.html      Layout + HTML structure
-├── style.css       Dark theme, ATC scanner, collapsible panel, STBY states
-├── app.js          All logic — radar, iCAS2, ATC scanner, waterfall, WS/mock
-├── README.md       This file
-└── CHANGELOG.md    Version history
+Frequency change
+  └─ audioConnect(freqKHz)
+       └─ GET /audio/stream?freq=<kHz>&gain=<dB>
+            └─ rtl_fm -f <Hz> -M am -s 200k -r 48000 -d <device>
+                 └─ ffmpeg → MP3 → browser <audio> element
 ```
 
----
+- Audio connects **automatically** on frequency change — no play button
+- Default state: **MUTED** — click UNMUTE to hear audio
+- STBY dialling: audio stays on active frequency
+- TFR commit: audio switches immediately
 
+### Status indicator (inline, right of TUNED/ACTIVE)
 
----
-
-## Real-time Audio Receiver (auto-streaming)
-
-PIRX v0.8.0 adds an always-on VHF audio receiver that behaves like a real ATC scanner — no play buttons, no user action required.
-
-### How it works
-
-When the active frequency changes (preset click, TFR commit, user slot tune) the frontend **immediately connects** to the backend audio stream for that frequency. The stream stays open 24/7 until the frequency changes or the tab is closed.
-
-```
-Frequency change → audioConnect(freq)
-  └─ GET /audio/stream?freq=119.475  (chunked audio/mpeg)
-       ├── ● LIVE       — streaming normally
-       ├── ⚠ BUFFERING  — connecting / stalled
-       └── ✗ OFFLINE    — backend unavailable (3 retries × 3 s)
-```
-
-### Status indicator
-
-The status dot sits inline in the frequency row, right of TUNED / ACTIVE:
-
-| State | Dot colour | Label |
+| State | Colour | Label |
 |---|---|---|
 | Streaming | Green glow | `LIVE` |
-| Connecting / stalled | Amber | `BUFFERING` |
-| Unavailable | Dim | `OFFLINE` |
+| Connecting | Amber | `BUFFERING` |
+| Failed | Dim | `OFFLINE` |
 
-### Mute toggle
-
-The **MUTE** button in the frequency row toggles audio silence without disconnecting the stream. While muted the button shows **UNMUTE**. The underlying stream stays connected — unmuting resumes instantly with no reconnect delay.
-
-### STBY/TFR behaviour
-
-- **STBY mode** (dialling a new frequency): audio **stays on the current active** frequency — no interruption while browsing.
-- **TFR** (commit standby to active): audio **switches immediately** to the new frequency.
-
-### Backend API this frontend expects
+### Backend API
 
 ```
-GET /audio/stream?freq=<MHz>
-  Response: Content-Type: audio/mpeg
-            Transfer-Encoding: chunked
-            Connection: keep-alive
-  Body: continuous MP3 / AAC stream of demodulated VHF-AM audio
+GET /audio/stream?freq=<kHz>&gain=<0-50>
+Response: Content-Type: audio/mpeg
+          Transfer-Encoding: chunked
 ```
 
-Alternatively a WebSocket endpoint can be used — replace `AUDIO_STREAM_URL()` in `app.js`:
+---
+
+## 9. FFT / Waterfall
+
+### Live mode (requires `/audio/fft` backend route)
+
+See `server-fft-patch.js` for the implementation using `rtl_power`.
+
+```
+GET /audio/fft?bins=<N>&gain=<0-50>
+Response: { bins: [0.0..1.0, ...], min_khz: 118000, max_khz: 128000 }
+```
+
+- Spectrum trace turns **green**, badge shows `● LIVE FFT`
+- Polls at 150 ms intervals (~6 fps waterfall scroll)
+
+> **Device conflict:** `rtl_power` and `rtl_fm` cannot run simultaneously on
+> the same dongle. Live FFT only works when no audio stream is active.
+
+### Mock mode
+
+Default when backend FFT route is unavailable. Trace is **teal**, badge shows
+`● MOCK FFT`. Animated peaks at known EDDN frequencies.
+
+### Waterfall interaction
+
+- **STBY mode**: click waterfall to tune standby frequency (snaps to 8.33 kHz)
+- White line = tuned frequency
+- Dashed teal line = active frequency when STBY engaged
+
+---
+
+## 10. Configuration reference
+
+### app.js frontend constants
 
 ```js
-// HTTP stream (default)
-function AUDIO_STREAM_URL(khz) {
-  return `${API_BASE}/audio/stream?freq=${(khz/1000).toFixed(3)}`;
-}
-
-// WebSocket alternative — swap <audio>.src for a WebSocket + AudioContext
-// (requires additional Web Audio API plumbing)
+const PRODUCTION_HOSTS  = ['pirx.dustyhut.org']; // your hostname(s)
+const LOCAL_PORT        = 8080;
+const REF_LAT           = 49.498611;  // EDDN ARP 49°29'55"N
+const REF_LON           = 11.078056;  // EDDN ARP 011°04'41"E
+const SIGNAL_PLOC_AGE   = 30;         // s before PLOC badge
+const SIGNAL_MAX_AGE    = 60;         // s before track removed
+const WF_POLL_MS        = 150;        // FFT poll interval ms
+const AUDIO_MAX_RETRIES = 3;          // stream retry attempts
+const AUDIO_RETRY_MS    = 3000;       // ms between retries
 ```
 
-### Retry logic
+---
 
-On stream error the frontend retries up to `AUDIO_MAX_RETRIES` (3) times with `AUDIO_RETRY_MS` (3 000 ms) between attempts. After three failures the status shows `OFFLINE` and retrying stops. A subsequent frequency change resets the retry counter and reconnects.
+## 11. Troubleshooting
 
-### Pi performance notes
-
-- Uses a single `<audio>` element — zero Web Audio API overhead
-- Stream is paused (not disconnected) on mute — no reconnect cost
-- Old stream torn down before new one opens — no concurrent connections
-- Graceful on backend restart — next frequency change reconnects automatically
-
-## Deployment
-
-### Static file serving (any host)
-
-No build step. Serve the three files from any static host.
+### Radar shows MOCK instead of LIVE
 
 ```bash
-# Local development
-python3 -m http.server 8080
-# or
-npx serve .
+wscat -c ws://localhost:8080/ws/traffic   # should print JSON immediately
+curl -s http://localhost:8080/status | python3 -m json.tool
+ps aux | grep rtl_fm    # kill any stale process holding the dongle
+pm2 restart pirx-backend
 ```
 
-### Cloudflare Tunnel (Pi → public HTTPS)
+### Audio OFFLINE / BUFFERING permanently
 
-See [CLOUDFLARE-TUNNEL.md](CLOUDFLARE-TUNNEL.md) for full setup guide.
-
-Short version:
-1. Install `cloudflared` on the Pi
-2. `cloudflared tunnel login`
-3. `cloudflared tunnel create pirx`
-4. Configure public hostname → `http://localhost:8080`
-5. `cloudflared tunnel run pirx`
-
-The frontend auto-detects it is on a production host and switches to `wss://` with no port.
-
-### Backend endpoint configuration
-
-Edit the two constants at the top of `app.js`:
-
-```js
-const PRODUCTION_HOSTS = [
-  'pirx.dustyhut.org',   // ← your Cloudflare Tunnel / custom domain
-];
-const LOCAL_PORT = 8080;  // ← backend port for LAN / localhost
+```bash
+# Test pipeline directly
+rtl_fm -d 1 -f 119475000 -M am -s 200k -r 48000 -g 40 - 2>/dev/null | \
+  ffmpeg -f s16le -ar 48000 -ac 1 -i pipe:0 -codec:a libmp3lame -b:a 32k -f mp3 pipe:1 | \
+  od -A x -t x1z | head -3
+# Adjust -d index if needed
 ```
 
-All other URL logic is automatic. See the full comment block in `app.js` for multi-domain and reverse-proxy setups.
+### Only APP works, other presets silent
+
+Fixed in v0.9.0. Update `app.js` — the audio reconnect guard was preventing
+frequency switches when the old stream was still "playing".
+
+### Buttons 1–4 stay highlighted
+
+Fixed in v0.9.0. `clearAllActive()` now runs before any preset or slot
+is highlighted.
 
 ---
 
-## Backend WebSocket format
-
-```json
-{
-  "type": "tracks",
-  "tracks": [
-    {
-      "icao":        "3C1A3F",
-      "callsign":    "DLH123",
-      "lat":         49.41,
-      "lon":         11.12,
-      "altitude":    34000,
-      "groundspeed": 452,
-      "heading":     270,
-      "squawk":      "7000"
-    }
-  ]
-}
-```
-
-All fields except `icao`, `lat`, `lon` optional. Backend also optionally exposes `GET /health` and `GET /status`.
-
----
-
-## Browser Compatibility
-
-| Browser | Minimum |
-|---|---|
-| Chrome / Edge | 80+ |
-| Firefox | 75+ |
-| Safari | 14+ |
-
-High-DPI rendering automatic via `window.devicePixelRatio`.
-Tested on Raspberry Pi 4 Chromium (1024×600).
-
----
-
-## Roadmap
+## 12. Milestone roadmap
 
 | Milestone | Status | Description |
 |---|---|---|
-| M1 | ✅ | Static frontend, mock data, iCAS2 labels, ATC scanner |
-| M2 | ✅ | 10 MHz waterfall, click-to-tune, EDDN frequencies, clean tags |
-| M3 | ✅ | STBY/TFR workflow, collapsible panel, white squares, signal lifetime |
-| M4-audio | ✅ | Always-on audio receiver, auto-stream on freq change, mute toggle |
-| M4 | — | Real FFT — RTL-SDR or WebSDR WebSocket feed |
-| M5 | — | Sector geometry overlay (TMA / CTR / airways GeoJSON) |
-| M6 | — | Live ADSB adapter (OpenSky / ADSB-Exchange) |
-| M7 | — | Conflict detection — STCA with urgency label promotion |
-
----
-
-## Licence
-
-MIT — see [LICENCE](LICENCE).
+| M1 | ✅ | iCAS2 radar canvas, mock tracks, tag system |
+| M2 | ✅ | STBY/TFR workflow, collapsible panel, white squares |
+| M3 | ✅ | Always-on audio receiver, auto-stream, mute toggle |
+| M4 | ✅ | Live ADS-B via Beast TCP, EDDN ARP coordinates |
+| M5 | ✅ | AM fix, ffmpeg pipeline, autoplay fix, gain slider |
+| M6 | 🔲 | Live FFT via rtl_power (server-fft-patch.js ready) |
+| M7 | 🔲 | Approach plate overlay |
+| M8 | 🔲 | Multi-sector / multi-position |

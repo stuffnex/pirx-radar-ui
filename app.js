@@ -1,6 +1,6 @@
 'use strict';
 // ═══════════════════════════════════════════════════════════════════════
-// PIRX Radar / SDR Console — app.js  v0.8.0
+// PIRX Radar / SDR Console — app.js  v0.9.0
 //
 //  1. Aircraft symbols: white squares, 25% of previous diamond size
 //  2. Top tag line: squawk display with V/code rules, no WARNINGS text
@@ -398,6 +398,7 @@ let pendingFreq = null;  // freq ready to be stored, set when TFR pressed
 
 let activeMemKey = 'APP';  // currently highlighted preset/slot
 let isMuted = true;   // default: muted — user must unmute
+let rtlGain = 40;     // RTL-SDR gain (0–50 dB) — sent with audio stream request
 
 // ═══════════════════════════════════════════════════════════════════════
 // GENERAL APP STATE
@@ -546,10 +547,11 @@ function commitToDestination(key, type) {
   scanPhase = 0;
   pendingFreq = null;
   audioOnFreqChange();
-  updateScanPhaseUI();
+  updateScanPhaseUI();    // clears STBY+TFR highlights (scanPhase=0)
+  clearAllActive();       // clear any lingering highlights
   updateAllMemBtns();
   updateUserBtns();
-  flashMemBtn(key);
+  flashMemBtn(key);       // briefly flash the destination button green
   return true;
 }
 
@@ -560,7 +562,9 @@ function tunePreset(key) {
   freqEl.textContent = (freq / 1000).toFixed(3);
   updateTuneMarker();
   audioOnFreqChange();
+  clearAllActive();         // ensure 1–4 slots lose highlight
   updateAllMemBtns();
+  updateUserBtns();
   log(key + ' → ' + (freq/1000).toFixed(3) + ' MHz', 'info');
 }
 
@@ -572,6 +576,7 @@ function tuneUserSlot(key) {
   freqEl.textContent = (freq / 1000).toFixed(3);
   updateTuneMarker();
   audioOnFreqChange();
+  clearAllActive();         // ensure presets lose highlight
   updateAllMemBtns();
   updateUserBtns();
   log(key + ' → ' + (freq/1000).toFixed(3) + ' MHz', 'info');
@@ -615,15 +620,24 @@ function updateAllMemBtns() { MEM_KEYS.forEach(k => updateMemBtn(k)); }
 
 function updateUserBtns() {
   USER_KEYS.forEach(k => {
-    const key = k.toLowerCase();
-    const btn = document.getElementById('mem-' + key);
-    const fEl = document.getElementById('mf-' + key);
+    // DOM id for user slots: mem-u1, mem-u2, mem-u3, mem-u4
+    const domKey = 'mem-' + k.toLowerCase();
+    const btn = document.getElementById(domKey);
+    const fEl = document.getElementById('mf-' + k.toLowerCase());
     if (!btn || !fEl) return;
     const v = userSlots[k];
     fEl.textContent = v !== null ? (v / 1000).toFixed(3) : '—';
     btn.classList.toggle('has-freq', v !== null);
     btn.classList.toggle('active-mem', k === activeMemKey && scanPhase === 0);
   });
+}
+
+/**
+ * clearAllActive — removes active-mem highlight from every preset and user slot.
+ * Called before setting a new activeMemKey so buttons are mutually exclusive.
+ */
+function clearAllActive() {
+  document.querySelectorAll('.mem-btn').forEach(b => b.classList.remove('active-mem'));
 }
 
 function flashMemBtn(key) {
@@ -719,6 +733,15 @@ function initATCControls() {
   document.getElementById('sql-slider').addEventListener('input', function() {
     document.getElementById('sql-val').textContent = (+this.value >= 0 ? '+' : '') + this.value + ' dB';
   });
+  // Gain slider — updates rtlGain and reconnects audio stream with new gain
+  document.getElementById('gain-slider').addEventListener('input', function() {
+    rtlGain = parseInt(this.value, 10);
+    document.getElementById('gain-val').textContent = rtlGain;
+    // Reconnect stream with new gain — reset audioConnectedFreq to force reconnect
+    audioConnectedFreq = null;
+    audioOnFreqChange();
+    log('Gain → ' + rtlGain + ' dB', 'info');
+  });
 
   updateAllMemBtns();
   updateUserBtns();
@@ -760,11 +783,12 @@ function initATCControls() {
 const AUDIO_MAX_RETRIES = 3;
 const AUDIO_RETRY_MS    = 3000;
 
-/** Build the audio stream URL for a given frequency in kHz
- *  Backend expects integer kHz: /audio/stream?freq=119475
+/** Build the audio stream URL for a given frequency in kHz.
+ *  Backend expects: /audio/stream?freq=<kHz integer>&gain=<0-50>
+ *  Gain is passed so the backend can adjust rtl_fm -g dynamically.
  */
 function AUDIO_STREAM_URL(khz) {
-  return `${API_BASE}/audio/stream?freq=${Math.round(khz)}`;
+  return `${API_BASE}/audio/stream?freq=${Math.round(khz)}&gain=${rtlGain}`;
 }
 
 // Hidden <audio> element — created once, reused
@@ -788,8 +812,9 @@ function setAudioStatus(state) {
 }
 
 function audioConnect(khz) {
-  // Don't reconnect to same frequency unless recovering from error
-  if (audioConnectedFreq === khz && !audioEl.paused && !audioEl.error) return;
+  // Always reconnect when frequency changes; only skip if already on same freq and healthy
+  if (audioConnectedFreq === khz && audioEl.src &&
+      !audioEl.paused && !audioEl.error && audioEl.readyState >= 2) return;
 
   clearTimeout(audioRetryTid);
   audioEl.pause();
@@ -856,11 +881,56 @@ function audioOnFreqChange() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// WATERFALL — 10 MHz span, ≤40 fps, STBY-only click-to-tune
+// WATERFALL — live FFT from backend, fallback to mock if unavailable
+//
+//  Backend endpoint (optional):
+//    GET /audio/fft?bins=<N>&gain=<0-50>
+//    Response: JSON { bins: [0..1, ...], min_khz: 118000, max_khz: 128000 }
+//
+//  The frontend polls this endpoint at WF_POLL_MS intervals.
+//  If unavailable it falls back to the animated mock spectrum.
+//  Waterfall history scrolls downward; spectrum trace drawn at top.
+//  STBY mode: click on waterfall to tune standby frequency.
 // ═══════════════════════════════════════════════════════════════════════
 
 function wfXtoFreq(x, W) { return WF_MIN_KHZ + (x / W) * WF_SPAN_KHZ; }
 function freqToWfX(khz, W) { return ((khz - WF_MIN_KHZ) / WF_SPAN_KHZ) * W; }
+
+// Live FFT state
+const WF_POLL_MS   = 150;    // poll interval ms (~6 fps for waterfall scroll)
+let   wfLiveBins   = null;   // Float32Array of normalised power [0..1], length = canvas width
+let   wfLiveMode   = false;  // true once backend /audio/fft responds successfully
+let   wfPollTid    = null;
+
+/** Poll backend for FFT spectrum data */
+async function wfPollFFT() {
+  try {
+    const W    = wfCanvas.width || 512;
+    const url  = `${API_BASE}/audio/fft?bins=${W}&gain=${rtlGain}`;
+    const resp = await fetch(url, { signal: AbortSignal.timeout(500) });
+    if (!resp.ok) throw new Error(resp.status);
+    const data = await resp.json();
+    if (Array.isArray(data.bins) && data.bins.length > 0) {
+      wfLiveBins  = new Float32Array(data.bins);
+      wfLiveMode  = true;
+      // Update wf-mode-label to show live indicator
+      if (scanPhase !== 1) {
+        document.getElementById('wf-mode-label').textContent =
+          '118 – 128 MHz · LIVE · STBY to tune';
+      }
+    }
+  } catch (_) {
+    // Backend FFT not available — stay in mock mode silently
+    wfLiveMode = false;
+  }
+}
+
+/** Start/stop FFT polling */
+function startWfPolling() {
+  if (wfPollTid) return;
+  wfPollFFT();  // immediate first fetch
+  wfPollTid = setInterval(wfPollFFT, WF_POLL_MS);
+}
 
 function renderWaterfall(ts) {
   requestAnimationFrame(renderWaterfall);
@@ -871,24 +941,34 @@ function renderWaterfall(ts) {
   if (W <= 0 || H <= 0) return;
   wfPhase += 0.025;
 
+  // ── Build spectrum row ──────────────────────────────────────────────
   const row = new Uint8ClampedArray(W * 4);
   for (let i = 0; i < W; i++) {
-    const fKhz = wfXtoFreq(i, W);
-    let p = 0.03 + 0.03 * Math.random();
-    for (const pk of EDDN_PEAKS) {
-      const df = (fKhz - pk.f) / 25;
-      p += pk.amp * (0.65 + 0.35 * Math.sin(wfPhase * (1 + pk.amp) + pk.f * 0.0001))
-           * Math.exp(-(df * df));
+    let p;
+    if (wfLiveMode && wfLiveBins && i < wfLiveBins.length) {
+      // Live FFT data from backend
+      p = Math.max(0, Math.min(1, wfLiveBins[i]));
+    } else {
+      // Mock spectrum — animated peaks at known EDDN frequencies
+      const fKhz = wfXtoFreq(i, W);
+      p = 0.03 + 0.03 * Math.random();
+      for (const pk of EDDN_PEAKS) {
+        const df = (fKhz - pk.f) / 25;
+        p += pk.amp * (0.65 + 0.35 * Math.sin(wfPhase * (1 + pk.amp) + pk.f * 0.0001))
+             * Math.exp(-(df * df));
+      }
+      p = Math.min(1, p);
     }
-    p = Math.min(1, p);
+    // Colour map: black → teal → green → yellow-white (SDRSharp style)
     let r, g, b;
-    if      (p < 0.15) { r=0;              g=Math.round(p/0.15*55);    b=Math.round(p/0.15*85); }
-    else if (p < 0.40) { const t=(p-0.15)/0.25; r=0;              g=Math.round(55+t*115);   b=Math.round(85+t*85); }
-    else if (p < 0.70) { const t=(p-0.40)/0.30; r=Math.round(t*25);   g=Math.round(170+t*85); b=Math.round(170-t*50); }
-    else               { const t=(p-0.70)/0.30; r=Math.round(25+t*230); g=255;                 b=Math.round(120-t*80); }
+    if      (p < 0.15) { r=0;                    g=Math.round(p/0.15*55);    b=Math.round(p/0.15*85); }
+    else if (p < 0.40) { const t=(p-0.15)/0.25;  r=0;                    g=Math.round(55+t*115);   b=Math.round(85+t*85); }
+    else if (p < 0.70) { const t=(p-0.40)/0.30;  r=Math.round(t*25);    g=Math.round(170+t*85);   b=Math.round(170-t*50); }
+    else               { const t=(p-0.70)/0.30;  r=Math.round(25+t*230); g=255;                    b=Math.round(120-t*80); }
     const idx = i*4; row[idx]=r; row[idx+1]=g; row[idx+2]=b; row[idx+3]=255;
   }
 
+  // ── Scroll waterfall history ────────────────────────────────────────
   wfHistory.unshift(row);
   if (wfHistory.length > H) wfHistory.length = H;
 
@@ -900,8 +980,8 @@ function renderWaterfall(ts) {
   }
   wfCtx.putImageData(imgData, 0, 0);
 
+  // ── Spectrum panel background + grid ───────────────────────────────
   wfCtx.fillStyle = 'rgba(10,10,10,0.92)'; wfCtx.fillRect(0, 0, W, specH);
-
   wfCtx.strokeStyle = 'rgba(0,130,100,0.12)'; wfCtx.lineWidth = 1;
   for (let db = 0; db <= 4; db++) {
     const y = specH * (1 - db/4);
@@ -913,30 +993,37 @@ function renderWaterfall(ts) {
     wfCtx.beginPath(); wfCtx.moveTo(gx, 0); wfCtx.lineTo(gx, specH); wfCtx.stroke();
   }
 
+  // ── Spectrum trace ──────────────────────────────────────────────────
   wfCtx.beginPath(); wfCtx.moveTo(0, specH);
   for (let i = 0; i < W; i++) {
-    const fKhz = wfXtoFreq(i, W);
-    let p = 0.03 + 0.015 * Math.random();
-    for (const pk of EDDN_PEAKS) {
-      const df = (fKhz - pk.f) / 25;
-      p += (pk.amp * 1.1) * (0.65 + 0.35 * Math.sin(wfPhase * (1 + pk.amp) + pk.f * 0.0001))
-           * Math.exp(-(df * df));
+    let p;
+    if (wfLiveMode && wfLiveBins && i < wfLiveBins.length) {
+      p = Math.max(0, Math.min(1, wfLiveBins[i]));
+    } else {
+      const fKhz = wfXtoFreq(i, W);
+      p = 0.03 + 0.015 * Math.random();
+      for (const pk of EDDN_PEAKS) {
+        const df = (fKhz - pk.f) / 25;
+        p += (pk.amp * 1.1) * (0.65 + 0.35 * Math.sin(wfPhase * (1 + pk.amp) + pk.f * 0.0001))
+             * Math.exp(-(df * df));
+      }
+      p = Math.min(1, p);
     }
-    p = Math.min(1, p);
     wfCtx.lineTo(i, specH * (1 - p * 0.92));
   }
-  wfCtx.strokeStyle = 'rgba(0,220,200,0.90)'; wfCtx.lineWidth = 1.5; wfCtx.stroke();
+  wfCtx.strokeStyle = wfLiveMode ? 'rgba(0,255,136,0.90)' : 'rgba(0,220,200,0.90)';
+  wfCtx.lineWidth = 1.5; wfCtx.stroke();
 
   wfCtx.strokeStyle = 'rgba(0,170,170,0.22)'; wfCtx.lineWidth = 1;
   wfCtx.beginPath(); wfCtx.moveTo(0, specH); wfCtx.lineTo(W, specH); wfCtx.stroke();
 
-  // Tune marker — solid white
+  // ── Tune marker — solid white (STBY=standby freq, else active) ─────
   const tx = freqToWfX(scanPhase >= 1 ? stbyFreq : freq, W);
   wfCtx.strokeStyle = 'rgba(255,255,255,0.85)'; wfCtx.lineWidth = 2;
   wfCtx.beginPath(); wfCtx.moveTo(tx, 0); wfCtx.lineTo(tx, H); wfCtx.stroke();
   wfCtx.fillStyle = '#ffffff'; wfCtx.fillRect(tx - 4, 0, 8, 4);
 
-  // When STBY is active, show active-freq marker as dimmer second line
+  // ── STBY mode: dashed active-freq marker ───────────────────────────
   if (scanPhase >= 1) {
     const ax = freqToWfX(freq, W);
     wfCtx.strokeStyle = 'rgba(0,170,170,0.55)'; wfCtx.lineWidth = 1;
@@ -944,6 +1031,12 @@ function renderWaterfall(ts) {
     wfCtx.beginPath(); wfCtx.moveTo(ax, 0); wfCtx.lineTo(ax, H); wfCtx.stroke();
     wfCtx.setLineDash([]);
   }
+
+  // ── LIVE/MOCK indicator badge in bottom-left of spectrum panel ─────
+  wfCtx.font = `bold ${Math.round(8 * (window.devicePixelRatio||1))}px 'Courier New',monospace`;
+  wfCtx.textAlign = 'left'; wfCtx.textBaseline = 'bottom';
+  wfCtx.fillStyle = wfLiveMode ? 'rgba(0,255,136,0.70)' : 'rgba(0,170,170,0.40)';
+  wfCtx.fillText(wfLiveMode ? '● LIVE FFT' : '● MOCK FFT', 4, specH - 2);
 }
 
 // Waterfall click — only in STBY mode
@@ -1439,7 +1532,7 @@ function log(msg, type='info') {
 // BOOT
 // ═══════════════════════════════════════════════════════════════════════
 
-log('PIRX v0.8.0 — EDDN/NUE Nuremberg · audio receiver', 'ok');
+log('PIRX v0.9.0 — EDDN/NUE Nuremberg · audio + live FFT', 'ok');
 log('WS → ' + WS_URL, 'info');
 log('Tags: V=VFR(green) code=IFR(blue) code=EMRG(red) PLOC=aging(orange)', 'info');
 log('STBY to unlock presets + waterfall tuning', 'info');
@@ -1449,3 +1542,4 @@ initATCControls();
 connectWebSocket();
 requestAnimationFrame(render);
 requestAnimationFrame(renderWaterfall);
+startWfPolling();   // begin polling backend /audio/fft for live spectrum

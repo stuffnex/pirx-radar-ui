@@ -7,6 +7,95 @@ Dates are UTC. Entries are newest-first within each session.
 
 ---
 
+## [0.9.0] — 2026-03-17
+
+### Fixed
+
+#### Audio — only APP preset produced sound (all other presets silent)
+- **Root cause:** `audioConnect()` guard `if (audioConnectedFreq === khz && !audioEl.paused)` 
+  evaluated true when switching frequencies because the old stream element was still in 
+  "playing" state. New frequency was silently skipped.
+- **Fix:** Guard now checks `audioEl.src &&  audioEl.readyState >= 2` to confirm the 
+  stream is actually healthy before skipping reconnect.
+
+#### Buttons 1–4 remaining highlighted after pressing preset
+- **Root cause:** `updateAllMemBtns()` and `updateUserBtns()` managed highlight state 
+  independently. Pressing a preset cleared preset highlights but left user slot highlights 
+  untouched, and vice versa.
+- **Fix:** Added `clearAllActive()` which removes `active-mem` from every `.mem-btn` 
+  before the new key is set. Called in `tunePreset()`, `tuneUserSlot()`, and 
+  `commitToDestination()`.
+
+### Added
+
+#### GAIN slider (row 3)
+- New `<input id="gain-slider">` range 0–50 dB added to the slider row.
+- State variable `rtlGain` (default 40) tracks current value.
+- On change: updates `rtlGain`, resets `audioConnectedFreq = null`, calls 
+  `audioOnFreqChange()` to reconnect stream with new gain value.
+- `AUDIO_STREAM_URL()` now appends `&gain=<rtlGain>` to the stream URL.
+- VOL slider width reduced to `flex:0.9` (−10%), SQL to `flex:0.4` (−60%) to 
+  make room for the GAIN slider.
+
+#### Live FFT waterfall
+- `wfPollFFT()` polls `GET /audio/fft?bins=<W>&gain=<rtlGain>` every `WF_POLL_MS` (150 ms).
+- Response `{ bins: [0..1, ...] }` populates `wfLiveBins Float32Array`.
+- `renderWaterfall()` uses live bins when `wfLiveMode === true`, falls back to mock otherwise.
+- Spectrum trace colour: **green** (live) vs **teal** (mock).
+- Badge drawn in bottom-left of spectrum panel: `● LIVE FFT` or `● MOCK FFT`.
+- `startWfPolling()` called at boot.
+- Backend route implementation provided in `server-fft-patch.js`.
+
+#### Version bump to v0.9.0
+- `app.js` header, boot log, `index.html` title version span.
+
+### Backend patch files (not in frontend repo)
+
+#### `server-fft-patch.js`
+- `GET /audio/fft` route using `rtl_power` for one-sweep spectrum scan.
+- Returns normalised power bins as JSON.
+- Device index `FFT_DEVICE = 1` — adjust to match your audio dongle.
+- Note: `rtl_power` and `rtl_fm` cannot run simultaneously on same dongle.
+
+#### `server-audio-patch.md`
+- Documents the `rtl_fm` driver fix: `-M am` (was `-M fm`), `ffmpeg` instead of 
+  `sox` (not installed), `-d 0` device index for this specific Pi setup.
+
+---
+
+## [0.8.0] — 2026-03-17
+
+### Added — Always-on audio receiver
+
+- `AUDIO_STREAM_URL(khz)` — builds stream URL from `API_BASE`, integer kHz.
+- Hidden `<audio id="atc-audio">` element created at runtime.
+- `audioConnect(khz)` — tears down old stream, connects to new frequency.
+- `audioOnFreqChange()` — guard: no-op when `scanPhase === 1`.
+- `setAudioStatus(state)` — updates `#audio-status` dot and label.
+- Retry logic: up to `AUDIO_MAX_RETRIES` × `AUDIO_RETRY_MS`.
+- `toggleMute()` updated: sets `audioEl.muted`, updates button label to 
+  `UNMUTE`/`MUTE`, calls `audioEl.play()` from within user gesture context.
+- Default `isMuted = true` — stream connects muted, user must click UNMUTE.
+- `#audio-status` span with dot + label added to `.atc-status-pills`.
+- `#btn-mute` moved from slider row into pills row.
+
+### Fixed
+
+#### Autoplay policy (Edge / Chrome)
+- `audioEl.play()` moved from `oncanplay` handler (async, outside gesture) 
+  into `toggleMute()` (direct click handler). Browsers allow `play()` only 
+  from a user gesture context.
+
+#### Audio stream URL — integer kHz
+- Backend expects `?freq=119475` not `?freq=119.475`.
+- `AUDIO_STREAM_URL()` now uses `Math.round(khz)`.
+
+#### WebSocket track field normalisation
+- Backend sends `vertical_rate`; frontend expected `_vr`.
+- `handleTracksMsg()` now maps `t.vertical_rate → t._vr` on receipt.
+
+---
+
 ## [Unreleased]
 
 _Changes staged but not yet tagged._

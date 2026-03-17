@@ -13,7 +13,7 @@
 <header id="topbar">
   <div id="tl">
     <span id="logo-mark">⬡</span>
-    <span id="app-title">PIRX <span class="title-dim">Radar / SDR Console</span> <span class="title-ver">v0.8.0</span></span>
+    <span id="app-title">PIRX <span class="title-dim">Radar / SDR Console</span> <span class="title-ver">v0.9.0</span></span>
   </div>
   <div id="tc">
     <div id="conn-badge" class="badge badge-mock">
@@ -81,15 +81,17 @@
         <button class="step-btn pos" id="b-p25"  data-step="25"   data-dir="1">+25</button>
       </div>
 
-      <!-- Row 3: Volume + Squelch + MUTE toggle button -->
+      <!-- Row 3: Volume (short) + Squelch (shorter) + Gain + MUTE in pills row -->
       <div class="atc-slider-row">
         <span class="slider-lbl">VOL</span>
-        <input type="range" class="sdr-slider" id="vol-slider" min="-60" max="0" value="-10" step="1">
+        <input type="range" class="sdr-slider vol-slider" id="vol-slider" min="-60" max="0" value="-10" step="1">
         <span class="slider-val" id="vol-val">−10 dB</span>
-        <span class="slider-lbl" style="margin-left:6px">SQL</span>
-        <input type="range" class="sdr-slider" id="sql-slider" min="-80" max="0" value="-40" step="1">
+        <span class="slider-lbl">SQL</span>
+        <input type="range" class="sdr-slider sql-slider" id="sql-slider" min="-80" max="0" value="-40" step="1">
         <span class="slider-val" id="sql-val">−40 dB</span>
-
+        <span class="slider-lbl">GAIN</span>
+        <input type="range" class="sdr-slider gain-slider" id="gain-slider" min="0" max="50" value="40" step="1">
+        <span class="slider-val" id="gain-val">40</span>
       </div>
 
       <!-- Row 4: 6 protected ATC preset buttons -->
