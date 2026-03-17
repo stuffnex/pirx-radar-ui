@@ -655,6 +655,17 @@ function toggleMute() {
   btn.textContent = isMuted ? 'UNMUTE' : 'MUTE';
   updateStatusPills();
   log(isMuted ? 'Audio muted' : 'Audio unmuted', isMuted ? 'warn' : 'info');
+
+  // Unmute = user gesture — use it to start/resume playback.
+  // Browsers block audioEl.play() unless called from a user interaction.
+  if (!isMuted) {
+    if (audioEl.src && audioEl.paused) {
+      audioEl.play().catch(e => log('Audio play blocked: ' + e.message, 'warn'));
+    } else if (!audioEl.src) {
+      // Stream was never started — connect now
+      audioConnect(freq);
+    }
+  }
 }
 
 function initATCControls() {
@@ -801,7 +812,8 @@ function audioConnect(khz) {
 
   audioEl.oncanplay = () => {
     audioRetries = 0;
-    audioEl.play().catch(() => {});  // autoplay may require user gesture on some browsers
+    // Only auto-play if already unmuted by user gesture — otherwise wait for UNMUTE click
+    if (!isMuted) audioEl.play().catch(() => {});
   };
   audioEl.onplaying = () => {
     setAudioStatus('live');
