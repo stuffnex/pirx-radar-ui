@@ -897,17 +897,21 @@ function wfXtoFreq(x, W) { return WF_MIN_KHZ + (x / W) * WF_SPAN_KHZ; }
 function freqToWfX(khz, W) { return ((khz - WF_MIN_KHZ) / WF_SPAN_KHZ) * W; }
 
 // Live FFT state
-const WF_POLL_MS   = 150;    // poll interval ms (~6 fps for waterfall scroll)
+const WF_POLL_MS   = 3500;   // poll interval ms — rtl_power needs ~2-3s per sweep
 let   wfLiveBins   = null;   // Float32Array of normalised power [0..1], length = canvas width
 let   wfLiveMode   = false;  // true once backend /audio/fft responds successfully
 let   wfPollTid    = null;
 
+let wfPollPending = false;   // prevent overlapping rtl_power spawns
+
 /** Poll backend for FFT spectrum data */
 async function wfPollFFT() {
+  if (wfPollPending) return;   // previous sweep still running — skip
+  wfPollPending = true;
   try {
     const W    = wfCanvas.width || 512;
     const url  = `${API_BASE}/audio/fft?bins=${W}&gain=${rtlGain}`;
-    const resp = await fetch(url, { signal: AbortSignal.timeout(500) });
+    const resp = await fetch(url, { signal: AbortSignal.timeout(4000) });
     if (!resp.ok) throw new Error(resp.status);
     const data = await resp.json();
     if (Array.isArray(data.bins) && data.bins.length > 0) {
@@ -922,6 +926,8 @@ async function wfPollFFT() {
   } catch (_) {
     // Backend FFT not available — stay in mock mode silently
     wfLiveMode = false;
+  } finally {
+    wfPollPending = false;   // release lock regardless of outcome
   }
 }
 
