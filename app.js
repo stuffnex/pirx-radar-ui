@@ -751,7 +751,9 @@ function audioConnect(khz) {
   setAudioStatus('buffering');
   log('Audio → ' + (khz/1000).toFixed(3) + ' MHz', 'info');
 
-  audioEl.src = AUDIO_STREAM_URL(khz);
+  // Append timestamp to force browser to open a fresh HTTP/1.1 connection
+  // and bypass any QUIC upgrade attempt on the tunnel
+  audioEl.src = AUDIO_STREAM_URL(khz) + '&_t=' + Date.now();
   audioEl.muted = isMuted;
 
   // Remove old listeners before adding new ones
@@ -907,8 +909,13 @@ let   wfLiveMode   = false;  // true once backend /audio/fft responds successful
 let   wfPollTid    = null;
 
 let wfPollPending = false;   // prevent overlapping rtl_power spawns
+let wfLastErrCode = 0;       // track last FFT error to avoid log spam
 
-/** Poll backend for FFT spectrum data */
+/** Poll backend for FFT spectrum data.
+ *  503 = audio streaming (dongle busy) — expected, stay in mock mode silently.
+ *  500 = rtl_power failed — log once, stay in mock mode.
+ *  On success: populate wfLiveBins and switch to live mode.
+ */
 async function wfPollFFT() {
   if (wfPollPending) return;   // previous sweep still running — skip
   wfPollPending = true;
@@ -916,22 +923,35 @@ async function wfPollFFT() {
     const W    = wfCanvas.width || 512;
     const url  = `${API_BASE}/audio/fft?bins=${W}&gain=${rtlGain}`;
     const resp = await fetch(url, { signal: AbortSignal.timeout(4000) });
-    if (!resp.ok) throw new Error(resp.status);
+    if (resp.status === 503) {
+      // Dongle busy with audio — normal, silent, stay in mock mode
+      wfLiveMode = false;
+      wfLastErrCode = 503;
+      return;
+    }
+    if (!resp.ok) {
+      // Only log error once per new error code to avoid console spam
+      if (wfLastErrCode !== resp.status) {
+        wfLastErrCode = resp.status;
+        log('FFT ' + resp.status + ' — waterfall in mock mode', 'info');
+      }
+      wfLiveMode = false;
+      return;
+    }
     const data = await resp.json();
     if (Array.isArray(data.bins) && data.bins.length > 0) {
-      wfLiveBins  = new Float32Array(data.bins);
-      wfLiveMode  = true;
-      // Update wf-mode-label to show live indicator
+      wfLiveBins    = new Float32Array(data.bins);
+      wfLiveMode    = true;
+      wfLastErrCode = 0;
       if (scanPhase !== 1) {
         document.getElementById('wf-mode-label').textContent =
           '118 – 128 MHz · LIVE · STBY to tune';
       }
     }
   } catch (_) {
-    // Backend FFT not available — stay in mock mode silently
     wfLiveMode = false;
   } finally {
-    wfPollPending = false;   // release lock regardless of outcome
+    wfPollPending = false;
   }
 }
 
